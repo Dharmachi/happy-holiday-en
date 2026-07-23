@@ -2,6 +2,7 @@ const STAR_KEY = "hh-stars-v1";
 const WRONG_KEY = "hh-wrong-v1";
 const NOTEBOOK_KEY = "hh-notebook-v1";
 const PROGRESS_KEY = "hh-progress-v1";
+const MASTERY_KEY = "hh-mastery-v1";
 const ROUND = 12;
 const MATCH_N = 8;
 const AUTO_NEXT_OK = 700;
@@ -106,6 +107,181 @@ function saveProgress() {
 function markPlayed(gameId) {
   state.progress[gameId] = (state.progress[gameId] || 0) + 1;
   saveProgress();
+}
+
+function loadMastery() {
+  try {
+    const data = JSON.parse(localStorage.getItem(MASTERY_KEY) || "{}");
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveMastery(data) {
+  localStorage.setItem(MASTERY_KEY, JSON.stringify(data));
+}
+
+function masteryBucketFor(item) {
+  if (!item) return null;
+  const kind = item.kind || "word";
+  if (kind === "phrase" || (item.en && allPhrases().some((p) => p.en === item.en) && !allVocab().some((v) => v.en === item.en))) {
+    return "phrases";
+  }
+  if (kind === "sentence") return "sentences";
+  if (kind === "order" || kind === "cloze") return "texts";
+  if (kind === "name" || kind === "adj") return "words";
+  if (allVocab().some((v) => v.en === item.en)) return "words";
+  if (allPhrases().some((p) => p.en === item.en)) return "phrases";
+  return "words";
+}
+
+/** 记录学习/掌握：seen=接触过，ok=答对次数；掌握=至少对 2 次且对多于错 */
+function trackMastery(bucket, id, ok) {
+  if (!bucket || !id) return;
+  const data = loadMastery();
+  if (!data[bucket]) data[bucket] = {};
+  if (!data[bucket][id]) data[bucket][id] = { seen: 0, ok: 0, fail: 0 };
+  const row = data[bucket][id];
+  row.seen += 1;
+  if (ok) row.ok += 1;
+  else row.fail += 1;
+  row.mastered = row.ok >= 2 && row.ok > row.fail;
+  row.lastAt = Date.now();
+  saveMastery(data);
+}
+
+function trackItemMastery(item, ok, meta = {}) {
+  if (!item) return;
+  const bucket = meta.bucket || masteryBucketFor(item);
+  const id = meta.id || item.en || item.id;
+  if (!bucket || !id) return;
+  trackMastery(bucket, id, !!ok);
+}
+
+function markGrammarViewed(topicId) {
+  if (!topicId) return;
+  const data = loadMastery();
+  if (!data.grammarMeta) data.grammarMeta = {};
+  if (!data.grammarMeta[topicId]) data.grammarMeta[topicId] = { viewed: false, practiced: 0 };
+  data.grammarMeta[topicId].viewed = true;
+  saveMastery(data);
+}
+
+function markTextRead(textId) {
+  if (!textId || textId === "dialogue") {
+    const data = loadMastery();
+    if (!data.texts) data.texts = {};
+    if (!data.texts.dialogue) data.texts.dialogue = { seen: 0, ok: 0, fail: 0 };
+    data.texts.dialogue.seen += 1;
+    data.texts.dialogue.ok += 1;
+    data.texts.dialogue.mastered = data.texts.dialogue.ok >= 1;
+    saveMastery(data);
+    return;
+  }
+  trackMastery("texts", textId, true);
+}
+
+function pct(n, total) {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((n / total) * 100)));
+}
+
+function countMastery(bucket, idList) {
+  const data = loadMastery();
+  const map = data[bucket] || {};
+  let learned = 0;
+  let mastered = 0;
+  idList.forEach((id) => {
+    const row = map[id];
+    if (!row) return;
+    if (row.seen > 0) learned += 1;
+    if (row.mastered || (row.ok >= 2 && row.ok > row.fail)) mastered += 1;
+  });
+  return { learned, mastered, total: idList.length };
+}
+
+function getLearningProgress() {
+  const wordIds = allVocab().map((x) => x.en);
+  const phraseIds = allPhrases().map((x) => x.en);
+  const sentenceIds = (window.UNIT.sentenceBank || []).map((x) => x.id || x.en);
+  const textIds = (window.UNIT.texts || []).map((x) => x.id);
+  const grammarIds = [];
+  allGrammarTopics().forEach((t) => {
+    (t.blanks || []).forEach((b) => grammarIds.push(`${t.id}:${b.id}`));
+  });
+
+  const words = countMastery("words", wordIds);
+  const phrases = countMastery("phrases", phraseIds);
+  const grammar = countMastery("grammar", grammarIds);
+  // 看过讲解也算入门学习
+  const meta = loadMastery().grammarMeta || {};
+  const viewedTopics = Object.keys(meta).filter((k) => meta[k] && meta[k].viewed).length;
+  const topicTotal = allGrammarTopics().length;
+  const grammarLearned = Math.min(grammar.total, Math.max(grammar.learned, Math.round((viewedTopics / Math.max(1, topicTotal)) * grammar.total * 0.3 + grammar.learned)));
+
+  const texts = countMastery("texts", textIds);
+  const sentences = countMastery("sentences", sentenceIds);
+
+  const modules = [
+    { id: "words", title: "单词", ...words, tip: `${words.total} 个单词` },
+    { id: "phrases", title: "短语表达", ...phrases, tip: `${phrases.total} 条短语` },
+    { id: "grammar", title: "语法", learned: grammarLearned, mastered: grammar.mastered, total: grammar.total, tip: `${grammar.total} 道语法题 · ${topicTotal} 个专题` },
+    { id: "texts", title: "课文", ...texts, tip: `${texts.total} 篇课文` },
+    { id: "sentences", title: "句子", ...sentences, tip: `${sentences.total} 个重点句` },
+  ];
+
+  const totalItems = modules.reduce((s, m) => s + m.total, 0);
+  const learnedItems = modules.reduce((s, m) => s + m.learned, 0);
+  const masteredItems = modules.reduce((s, m) => s + m.mastered, 0);
+
+  return {
+    modules,
+    overall: {
+      title: "本单元总进度",
+      learned: learnedItems,
+      mastered: masteredItems,
+      total: totalItems,
+    },
+  };
+}
+
+function renderProgressBars() {
+  const prog = getLearningProgress();
+  const bar = (label, value, total, tone) => {
+    const p = pct(value, total);
+    return `
+      <div class="prog-row">
+        <div class="prog-label"><span>${esc(label)}</span><span>${value}/${total} · ${p}%</span></div>
+        <div class="prog-track"><div class="prog-fill ${tone}" style="width:${p}%"></div></div>
+      </div>`;
+  };
+
+  return `
+    <section class="card soft progress-board">
+      <h2>学习进度</h2>
+      <p class="muted">学习 = 接触过；掌握 = 至少答对 2 次且对多于错。</p>
+      <div class="overall-prog">
+        <h3>${esc(prog.overall.title)}</h3>
+        ${bar("学习", prog.overall.learned, prog.overall.total, "learn")}
+        ${bar("掌握", prog.overall.mastered, prog.overall.total, "master")}
+      </div>
+      <div class="module-prog-list">
+        ${prog.modules
+          .map(
+            (m) => `
+          <div class="module-prog">
+            <div class="module-prog-head">
+              <strong>${esc(m.title)}</strong>
+              <span class="muted">${esc(m.tip || "")}</span>
+            </div>
+            ${bar("学习", m.learned, m.total, "learn")}
+            ${bar("掌握", m.mastered, m.total, "master")}
+          </div>`,
+          )
+          .join("")}
+      </div>
+    </section>`;
 }
 
 function allVocab() {
@@ -406,13 +582,16 @@ function addWrong(item, meta = {}) {
   state.wrongCount = list.length;
   const nbItem = { ...item, kind: item.kind || meta.kind || "word", zh: item.zh || meta.prompt || "" };
   if (isNotebookable(nbItem)) saveToNotebook(nbItem, { key });
+  if (state.game !== "grammar" && !meta.skipMastery) {
+    trackItemMastery(nbItem, false, { id: meta.masteryId, bucket: meta.bucket });
+  }
 }
 
 function markCorrect(item, key) {
   const k = key || (item ? itemKey(item) : null);
-  if (!k) return;
+  if (!k && state.game !== "grammar") return;
   let list = loadWrongBook();
-  const i = list.findIndex((x) => x.key === k);
+  const i = k ? list.findIndex((x) => x.key === k) : -1;
   if (i >= 0) {
     if (state.game === "review" || state.game === "notebookReview") {
       list.splice(i, 1);
@@ -424,6 +603,7 @@ function markCorrect(item, key) {
     state.wrongCount = list.length;
   }
   if (state.game === "notebookReview") notebookAdvance(k);
+  if (item && state.game !== "grammar" && !item.skipMastery) trackItemMastery(item, true);
 }
 
 function earnStars(n) {
@@ -527,6 +707,7 @@ function startGame(gameId) {
     state.grammarTab = "rules";
     state.grammarTopicId = "indefinite";
     state.round = [];
+    markGrammarViewed("indefinite");
   } else if (gameId === "shoot") {
     startShootRun();
     return;
@@ -542,6 +723,7 @@ function startGame(gameId) {
     setupBuild(state.round[0]);
   } else if (gameId === "read") {
     state.readTextId = window.UNIT.texts[0].id;
+    markTextRead(state.readTextId);
   } else if (gameId === "review") {
     const wrong = loadWrongBook().slice(0, ROUND);
     state.round = wrong.map((w) => ({
@@ -1340,6 +1522,10 @@ function checkSpell() {
 
 function checkGrammar(choice) {
   const item = current();
+  const topic = currentGrammarTopic();
+  const masteryId = `${topic.id}:${item.id}`;
+  const ok = choice === item.answer;
+  trackMastery("grammar", masteryId, ok);
   answerQuiz(choice, item.answer);
 }
 
@@ -1350,14 +1536,16 @@ function checkBuild() {
   const ok = norm(got) === norm(item.words.join(" "));
   state.answered = true;
   state.feedbackOk = ok;
+  trackMastery("sentences", item.id || item.en, ok);
   if (ok) {
     state.score += 1;
     state.feedback = "句子正确！";
   } else {
     state.feedback = `正确句子：${item.en}`;
-    addWrong({ en: item.en, zh: item.zh, kind: "sentence" }, { key: `sentence:${item.id}`, answer: item.en });
+    addWrong({ en: item.en, zh: item.zh, kind: "sentence" }, { key: `sentence:${item.id}`, answer: item.en, skipMastery: true });
   }
   render();
+  scheduleAutoNext(ok);
 }
 
 function checkOrder() {
@@ -1388,13 +1576,22 @@ function checkCloze() {
     const got = norm(state.clozeAnswers[i] || "");
     const ans = norm(b.answer);
     if (got === ans) okCount += 1;
-    else addWrong({ en: b.answer, zh: b.hint || text.title, kind: "cloze" }, { key: `cloze:${text.id}:${i}` });
+    else addWrong({ en: b.answer, zh: b.hint || text.title, kind: "cloze" }, { key: `cloze:${text.id}:${i}`, skipMastery: true });
   });
+  const allOk = okCount === text.blanks.length;
+  trackMastery("texts", text.id, allOk);
+  // 部分对也算接触过：若未全对，再记一次 seen-only via fail path already... trackMastery with false still increments seen
+  if (!allOk && okCount > 0) {
+    // 补一次“学过”但不算掌握：再保证 seen
+    const data = loadMastery();
+    if (data.texts && data.texts[text.id]) data.texts[text.id].seen = Math.max(data.texts[text.id].seen, 1);
+    saveMastery(data);
+  }
   state.answered = true;
-  state.feedbackOk = okCount === text.blanks.length;
+  state.feedbackOk = allOk;
   state.score += okCount;
   state.feedback =
-    okCount === text.blanks.length
+    allOk
       ? "全部填对了！"
       : `对了 ${okCount}/${text.blanks.length} 空。可对照课文再练。`;
   render();
@@ -1445,6 +1642,8 @@ function renderHome() {
         ${u.goals.map((g) => `<li>${esc(g.zh)}</li>`).join("")}
       </ul>
     </section>
+
+    ${renderProgressBars()}
 
     ${cats
       .map((cat) => {
@@ -2197,6 +2396,7 @@ function bind() {
       state.grammarTab = "rules";
       state.round = [];
       state.answered = false;
+      markGrammarViewed(state.grammarTopicId);
       render();
     }),
   );
@@ -2206,6 +2406,7 @@ function bind() {
       state.round = [];
       state.answered = false;
       state.feedback = "";
+      markGrammarViewed(state.grammarTopicId);
       render();
     }),
   );
@@ -2382,6 +2583,7 @@ function bind() {
   document.querySelectorAll("[data-read]").forEach((el) =>
     el.addEventListener("click", () => {
       state.readTextId = el.getAttribute("data-read");
+      markTextRead(state.readTextId);
       render();
     }),
   );
