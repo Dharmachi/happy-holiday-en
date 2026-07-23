@@ -12,7 +12,7 @@ const AUTO_NEXT_BAD = 1200;
 const SRS_DAYS = [1, 2, 4, 7, 15, 30];
 
 const GAMES = [
-  { id: "pk", title: "双人 PK", desc: "同屏或两台手机联网对战", cat: "对战" },
+  { id: "pk", title: "联网 PK", desc: "两台手机输入房间号对战", cat: "对战" },
   { id: "gun", title: "开枪打靶", desc: "点靶子开枪打正确单词", cat: "闯关" },
   { id: "shoot", title: "词块坠落", desc: "落地前选对中文", cat: "闯关" },
   { id: "flash", title: "单词闪卡", desc: "点选后自动下一张", cat: "单词" },
@@ -1348,11 +1348,11 @@ function startPkSetup() {
   state.game = "pk";
   state.feedback = "";
   state.pk = {
-    phase: "setup",
-    mode: "choose",
+    phase: "online-setup",
+    mode: "online",
     nameA: names.a,
     nameB: names.b,
-    myName: names.a,
+    myName: names.a || "我",
     scoreA: 0,
     scoreB: 0,
     myScore: 0,
@@ -2666,55 +2666,12 @@ function renderPk() {
   const pk = state.pk;
   if (!pk) return `<div class="card"><button class="primary" data-home>回首页</button></div>`;
 
-  if (pk.phase === "setup") {
-    return `
-      ${toolbar("双人 PK")}
-      <div class="card soft">
-        <h2>选择对战方式</h2>
-        <p class="muted">可以两个人用同一台平板同屏抢答，也可以两台手机/平板联网对战。</p>
-      </div>
-      <div class="games" style="margin-bottom:12px">
-        <button class="game-btn" data-pk-mode="local">
-          <strong>同屏 PK</strong>
-          <span>一台设备，左右分开点</span>
-        </button>
-        <button class="game-btn" data-pk-mode="online">
-          <strong>联网 PK</strong>
-          <span>两台设备，输入房间号开战</span>
-        </button>
-      </div>
-      <button class="ghost" data-home>回首页</button>
-    `;
-  }
-
-  if (pk.phase === "local-setup") {
-    return `
-      ${toolbar("同屏 PK")}
-      <div class="card soft">
-        <h2>同屏抢答</h2>
-        <p class="muted">一人坐左边，一人坐右边。谁先点对谁得分。共 ${PK_ROUNDS} 题。</p>
-      </div>
-      <div class="pk-setup">
-        <label class="pk-name pk-a">
-          <span>红方昵称</span>
-          <input id="pkNameA" value="${esc(pk.nameA)}" maxlength="8" />
-        </label>
-        <label class="pk-name pk-b">
-          <span>蓝方昵称</span>
-          <input id="pkNameB" value="${esc(pk.nameB)}" maxlength="8" />
-        </label>
-      </div>
-      <button class="primary" data-pk-start>开始对战</button>
-      <button class="ghost" data-pk-mode="choose">返回</button>
-    `;
-  }
-
-  if (pk.phase === "online-setup") {
+  if (pk.phase === "online-setup" || pk.phase === "setup") {
     return `
       ${toolbar("联网 PK")}
       <div class="card soft">
         <h2>两台设备对战</h2>
-        <p class="muted">双方打开同一网址。一方创建房间，另一方输入房间号加入。</p>
+        <p class="muted">双方打开同一网址。一方创建房间，另一方输入房间号加入。谁先点对谁得分。</p>
       </div>
       <label class="pk-name" style="display:grid;margin-bottom:12px">
         <span>你的昵称</span>
@@ -2737,7 +2694,7 @@ function renderPk() {
         </label>
         <button class="primary" data-pk-online="join">加入对战</button>
       </div>
-      <button class="ghost" data-pk-mode="choose">返回</button>
+      <button class="ghost" data-home>回首页</button>
     `;
   }
 
@@ -2749,7 +2706,7 @@ function renderPk() {
         ${
           pk.role === "host"
             ? `<p class="room-code">${esc(pk.roomCode)}</p>
-               <p class="muted">请让另一台设备打开同一网址，选择「联网 PK → 加入房间」，输入上面的号码。</p>`
+               <p class="muted">请让另一台设备打开同一网址，进入「联网 PK → 加入房间」，输入上面的号码。</p>`
             : `<p class="zh-line">房间 ${esc(pk.roomCode)}</p>`
         }
         <p class="tip">${esc(pk.status || "等待中…")}</p>
@@ -2759,7 +2716,7 @@ function renderPk() {
     `;
   }
 
-  if (pk.phase === "online-battle") {
+  if (pk.phase === "online-battle" || pk.phase === "battle") {
     const cur = pk.current;
     if (!cur) return `${toolbar("联网 PK")}<div class="card"><p class="muted">准备中…</p></div>`;
     return `
@@ -2798,53 +2755,7 @@ function renderPk() {
     `;
   }
 
-  const cur = pk.current;
-  if (!cur) return `${toolbar("双人 PK")}<div class="card"><p class="muted">准备中…</p></div>`;
-
-  const optBtns = (side, locked) =>
-    cur.options
-      .map((o) => {
-        let cls = `choice pk-opt ${side === "a" ? "side-a" : "side-b"}`;
-        if (pk.resolved && o === cur.answer) cls += " ok";
-        return `<button class="${cls}" data-pk-side="${side}" data-pk-choice="${esc(o)}" ${
-          locked || pk.resolved ? "disabled" : ""
-        }>${esc(o)}</button>`;
-      })
-      .join("");
-
-  return `
-    <div class="toolbar">
-      <button class="back" data-home>← 退出</button>
-      <span class="chip">第 ${pk.index + 1}/${pk.queue.length} 题</span>
-    </div>
-    <div class="pk-scoreboard">
-      <div class="pk-score a">
-        <strong>${esc(pk.nameA)}</strong>
-        <span>${pk.scoreA}</span>
-      </div>
-      <div class="pk-vs">VS</div>
-      <div class="pk-score b">
-        <strong>${esc(pk.nameB)}</strong>
-        <span>${pk.scoreB}</span>
-      </div>
-    </div>
-    <div class="card center pk-prompt">
-      <p class="muted">${esc(cur.hint || "抢答")}</p>
-      <p class="big-en">${cur.highlight ? highlightWord(cur.prompt, cur.highlight) : esc(cur.prompt)}</p>
-      <button class="ghost" data-speak="${esc(cur.speak)}">听发音</button>
-    </div>
-    <div class="pk-arena">
-      <div class="pk-col a ${pk.lockedA ? "locked" : ""}">
-        <p class="pk-col-title">${esc(pk.nameA)}${pk.lockedA ? "（本轮锁住）" : ""}</p>
-        <div class="choices">${optBtns("a", pk.lockedA)}</div>
-      </div>
-      <div class="pk-col b ${pk.lockedB ? "locked" : ""}">
-        <p class="pk-col-title">${esc(pk.nameB)}${pk.lockedB ? "（本轮锁住）" : ""}</p>
-        <div class="choices">${optBtns("b", pk.lockedB)}</div>
-      </div>
-    </div>
-    ${feedbackBlock()}
-  `;
+  return `<div class="card"><button class="primary" data-home>回首页</button></div>`;
 }
 
 function renderResult() {
@@ -2926,38 +2837,6 @@ function bind() {
   document.querySelectorAll("[data-start]").forEach((el) =>
     el.addEventListener("click", () => startGame(el.getAttribute("data-start"))),
   );
-  document.querySelectorAll("[data-pk-start]").forEach((el) =>
-    el.addEventListener("click", () => {
-      const a = document.getElementById("pkNameA");
-      const b = document.getElementById("pkNameB");
-      beginPkBattle(a ? a.value : "红方", b ? b.value : "蓝方");
-    }),
-  );
-  document.querySelectorAll("[data-pk-mode]").forEach((el) =>
-    el.addEventListener("click", () => {
-      const mode = el.getAttribute("data-pk-mode");
-      if (!state.pk) return;
-      if (mode === "choose") {
-        destroyPkNet();
-        state.pk.phase = "setup";
-        state.pk.mode = "choose";
-        render();
-        return;
-      }
-      if (mode === "local") {
-        state.pk.phase = "local-setup";
-        state.pk.mode = "local";
-        render();
-        return;
-      }
-      if (mode === "online") {
-        state.pk.phase = "online-setup";
-        state.pk.mode = "online";
-        state.pk.myName = state.pk.nameA || "我";
-        render();
-      }
-    }),
-  );
   document.querySelectorAll("[data-pk-online]").forEach((el) =>
     el.addEventListener("click", () => {
       const act = el.getAttribute("data-pk-online");
@@ -2980,11 +2859,6 @@ function bind() {
   );
   document.querySelectorAll("[data-pk-online-answer]").forEach((el) =>
     el.addEventListener("click", () => answerOnlinePk(el.getAttribute("data-pk-online-answer"))),
-  );
-  document.querySelectorAll("[data-pk-side]").forEach((el) =>
-    el.addEventListener("click", () => {
-      answerPk(el.getAttribute("data-pk-side"), el.getAttribute("data-pk-choice"));
-    }),
   );
   document.querySelectorAll("[data-gun-fire]").forEach((el) =>
     el.addEventListener("click", (e) => {
