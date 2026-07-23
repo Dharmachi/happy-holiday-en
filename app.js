@@ -1,14 +1,17 @@
 const STAR_KEY = "hh-stars-v1";
 const WRONG_KEY = "hh-wrong-v1";
 const PROGRESS_KEY = "hh-progress-v1";
-const ROUND = 10;
-const MATCH_N = 6;
+const ROUND = 12;
+const MATCH_N = 8;
+const AUTO_NEXT_OK = 700;
+const AUTO_NEXT_BAD = 1200;
 
 const GAMES = [
-  { id: "flash", title: "单词闪卡", desc: "看英文记中文", cat: "单词" },
-  { id: "quiz", title: "中英互译", desc: "四选一快速练", cat: "单词" },
+  { id: "flash", title: "单词闪卡", desc: "点选后自动下一张", cat: "单词" },
+  { id: "quiz", title: "中英互译", desc: "点选后自动下一题", cat: "单词" },
+  { id: "context", title: "语境理解", desc: "在句子里理解单词", cat: "单词" },
   { id: "match", title: "配对消消乐", desc: "英文和中文配对", cat: "单词" },
-  { id: "spell", title: "拼写挑战", desc: "看中文拼出英文", cat: "单词" },
+  { id: "spell", title: "拼写挑战", desc: "只看中文来拼写", cat: "单词" },
   { id: "phrase", title: "短语闯关", desc: "短语与表达", cat: "表达" },
   { id: "grammar", title: "不定代词", desc: "本单元语法重点", cat: "语法" },
   { id: "cloze", title: "课文挖空", desc: "同一材料反复练", cat: "课文" },
@@ -17,6 +20,9 @@ const GAMES = [
   { id: "read", title: "课文朗读", desc: "读课文、看笔记", cat: "课文" },
   { id: "review", title: "错题本", desc: "专攻错过的题", cat: "复习" },
 ];
+
+let autoNextTimer = null;
+let speakAudio = null;
 
 const state = {
   view: "home",
@@ -91,7 +97,38 @@ function allWordLike() {
   return [
     ...window.UNIT.vocab.map((x) => ({ ...x, kind: "word" })),
     ...window.UNIT.phrases.map((x) => ({ ...x, kind: "phrase", pos: "phr.", ipa: "" })),
+    ...(window.UNIT.properNouns || []).map((x) => ({ ...x, kind: "name", pos: "n.", ipa: "" })),
+    ...(window.UNIT.adjectives || []).map((x) => ({ ...x, kind: "adj", pos: "adj.", ipa: "" })),
   ];
+}
+
+/** 本单元全部英文/中文选项池（单词+短语+专有名词+形容词） */
+function unitPool(field) {
+  const seen = new Set();
+  const out = [];
+  for (const item of allWordLike()) {
+    const v = item[field];
+    if (!v) continue;
+    const key = norm(v);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
+}
+
+function pickDistractors(correct, field, n = 3) {
+  const pool = unitPool(field).filter((x) => norm(x) !== norm(correct));
+  return pick(pool, n);
+}
+
+function highlightWord(sentence, word) {
+  if (!sentence || !word) return esc(sentence || "");
+  const core = word.replace(/\s*\/\s*.*$/, "").replace(/\bsb'?s?\b|\bsth\b/gi, "").trim();
+  const token = core.split(/\s+/)[0] || core;
+  const re = new RegExp(`(\\b${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b)`, "i");
+  if (!re.test(sentence)) return esc(sentence);
+  return esc(sentence).replace(re, '<mark>$1</mark>');
 }
 
 function shuffle(arr) {
@@ -120,13 +157,63 @@ function norm(s) {
     .replace(/\s+/g, " ");
 }
 
-function speak(text) {
+function stopSpeak() {
+  if (speakAudio) {
+    speakAudio.pause();
+    speakAudio = null;
+  }
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+function pickEnglishVoice() {
+  if (!window.speechSynthesis) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  const rank = (v) => {
+    const name = v.name || "";
+    const lang = v.lang || "";
+    let s = 0;
+    if (/^en(-|_)US/i.test(lang)) s += 50;
+    else if (/^en/i.test(lang)) s += 30;
+    if (/Samantha|Karen|Moira|Google US|Microsoft (Aria|Jenny|Guy)|Neural|Enhanced|Premium/i.test(name)) s += 40;
+    if (/Google|Microsoft|Apple/i.test(name)) s += 10;
+    return s;
+  };
+  return [...voices].sort((a, b) => rank(b) - rank(a))[0] || null;
+}
+
+function speakNative(text) {
   if (!window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "en-US";
-  u.rate = 0.92;
+  u.rate = 0.88;
+  u.pitch = 1;
+  const voice = pickEnglishVoice();
+  if (voice) {
+    u.voice = voice;
+    u.lang = voice.lang || "en-US";
+  }
   window.speechSynthesis.speak(u);
+}
+
+/** 单词/短语优先用有道美音；长课文回退系统语音 */
+function speak(text) {
+  const t = String(text || "").trim();
+  if (!t) return;
+  stopSpeak();
+  const words = t.split(/\s+/).length;
+  const useDict = words <= 16 && t.length <= 120;
+  if (useDict) {
+    const url = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(t)}&type=2`;
+    speakAudio = new Audio(url);
+    speakAudio.play().catch(() => speakNative(t));
+    return;
+  }
+  speakNative(t);
+}
+
+if (typeof window !== "undefined" && window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = () => pickEnglishVoice();
 }
 
 function itemKey(item) {
@@ -180,13 +267,24 @@ function earnStars(n) {
 }
 
 function goHome() {
+  clearTimeout(autoNextTimer);
+  stopSpeak();
   state.view = "home";
   state.game = null;
   state.feedback = "";
   render();
 }
 
+function scheduleAutoNext(ok) {
+  clearTimeout(autoNextTimer);
+  autoNextTimer = setTimeout(() => {
+    if (state.view === "game" && state.answered) nextCard();
+  }, ok ? AUTO_NEXT_OK : AUTO_NEXT_BAD);
+}
+
 function startGame(gameId) {
+  clearTimeout(autoNextTimer);
+  stopSpeak();
   if (gameId === "review" && loadWrongBook().length === 0) {
     alert("错题本是空的，先去其他游戏练习吧！");
     return;
@@ -206,16 +304,18 @@ function startGame(gameId) {
   state.clozeAnswers = [];
   markPlayed(gameId);
 
-  if (gameId === "flash" || gameId === "quiz" || gameId === "spell") {
-    state.round = pick(allVocab(), ROUND);
+  if (gameId === "flash" || gameId === "quiz" || gameId === "spell" || gameId === "context") {
+    const pool = gameId === "context" ? allVocab().filter((x) => x.ex) : allVocab();
+    state.round = pick(pool, Math.min(ROUND, pool.length));
     if (gameId === "quiz") prepareQuizCard(state.round[0]);
+    if (gameId === "context") prepareContextCard(state.round[0]);
   } else if (gameId === "phrase") {
     state.round = pick(allPhrases(), Math.min(ROUND, allPhrases().length));
     preparePhraseCard(state.round[0]);
   } else if (gameId === "match") {
     setupMatch(pick(allVocab(), MATCH_N));
   } else if (gameId === "grammar") {
-    state.round = pick(window.UNIT.grammar.blanks, ROUND);
+    state.round = pick(window.UNIT.grammar.blanks, Math.min(ROUND, window.UNIT.grammar.blanks.length));
   } else if (gameId === "cloze") {
     const texts = window.UNIT.texts.filter((t) => t.cloze);
     state.clozeTextId = texts[0].id;
@@ -276,15 +376,8 @@ function prepareQuizCard(item) {
     state.quizPrompt = item.prompt || item.en;
     state.quizCorrect = item.answer;
     state.quizHint = item.zh || "选出正确英文";
-    const pool = [
-      ...allVocab().map((x) => x.en),
-      ...allPhrases().map((x) => x.en),
-      ...(window.UNIT.grammar.blanks || []).map((x) => x.answer),
-    ];
-    state.quizOptions = shuffle([
-      item.answer,
-      ...pick(pool.filter((x) => norm(x) !== norm(item.answer)), 3),
-    ]);
+    const field = /[A-Za-z]/.test(item.answer) ? "en" : "zh";
+    state.quizOptions = shuffle([item.answer, ...pickDistractors(item.answer, field, 3)]);
     return;
   }
   const enToZh = Math.random() < 0.5;
@@ -292,18 +385,12 @@ function prepareQuizCard(item) {
     state.quizPrompt = item.en;
     state.quizCorrect = item.zh;
     state.quizHint = "这个英文是什么意思？";
-    state.quizOptions = shuffle([
-      item.zh,
-      ...pick(allVocab().map((x) => x.zh).filter((x) => x !== item.zh), 3),
-    ]);
+    state.quizOptions = shuffle([item.zh, ...pickDistractors(item.zh, "zh", 3)]);
   } else {
     state.quizPrompt = item.zh;
     state.quizCorrect = item.en;
     state.quizHint = "这个中文对应哪个英文？";
-    state.quizOptions = shuffle([
-      item.en,
-      ...pick(allVocab().map((x) => x.en).filter((x) => x !== item.en), 3),
-    ]);
+    state.quizOptions = shuffle([item.en, ...pickDistractors(item.en, "en", 3)]);
   }
 }
 
@@ -311,13 +398,21 @@ function preparePhraseCard(item) {
   state.quizPrompt = item.en;
   state.quizCorrect = item.zh;
   state.quizHint = "这个短语是什么意思？";
-  state.quizOptions = shuffle([
-    item.zh,
-    ...pick(allPhrases().map((x) => x.zh).filter((x) => x !== item.zh), 3),
-  ]);
+  state.quizOptions = shuffle([item.zh, ...pickDistractors(item.zh, "zh", 3)]);
+}
+
+function prepareContextCard(item) {
+  state.quizPrompt = item.ex;
+  state.quizCorrect = item.zh;
+  state.quizHint = "句子里高亮的词是什么意思？";
+  state.quizOptions = shuffle([item.zh, ...pickDistractors(item.zh, "zh", 3)]);
+  state.contextWord = item.en;
+  state.contextExZh = item.exZh || "";
 }
 
 function nextCard() {
+  clearTimeout(autoNextTimer);
+  stopSpeak();
   state.index += 1;
   state.answered = false;
   state.selected = null;
@@ -333,10 +428,12 @@ function nextCard() {
   if (state.game === "order") setupOrder(current());
   if (state.game === "quiz" || state.game === "review") prepareQuizCard(current());
   if (state.game === "phrase") preparePhraseCard(current());
+  if (state.game === "context") prepareContextCard(current());
   render();
 }
 
 function finishRound() {
+  clearTimeout(autoNextTimer);
   const bonus = Math.max(1, Math.round(state.score / 2));
   earnStars(bonus);
   state.view = "result";
@@ -359,6 +456,7 @@ function answerQuiz(choice, correct) {
     addWrong(item, { answer: correct, prompt: item.zh || item.prompt });
   }
   render();
+  scheduleAutoNext(ok);
 }
 
 function onMatchTap(card) {
@@ -412,6 +510,7 @@ function checkSpell() {
     addWrong(item);
   }
   render();
+  scheduleAutoNext(ok);
 }
 
 function checkGrammar(choice) {
@@ -536,7 +635,7 @@ function renderHome() {
 
     <section class="card soft">
       <h2>教材进度</h2>
-      <p class="muted">单词 ${u.vocab.length} · 短语 ${u.phrases.length} · 专有名词 ${u.properNouns.length} · 课文 ${u.texts.length}</p>
+      <p class="muted">单词 ${u.vocab.length} · 短语 ${u.phrases.length} · 专有名词 ${u.properNouns.length} · 课文 ${u.texts.length} · 选项池 ${unitPool("en").length} 条</p>
       <p class="muted">你说一个单元一个单元补，Unit 1 已就绪。之后发 Unit 2 图片即可继续加。</p>
     </section>
   `;
@@ -567,19 +666,22 @@ function renderFlash() {
   const item = current();
   return `
     ${toolbar(`闪卡 ${state.index + 1}/${state.round.length}`)}
-    <div class="card center">
+    <div class="card center flash-card" data-flash-tap>
       <p class="pos">${esc(item.pos || "")} ${item.ipa ? esc(item.ipa) : ""}</p>
       <p class="big-en">${esc(item.en)}</p>
       <button class="ghost" data-speak="${esc(item.en)}">听发音</button>
       ${
         state.flashShow
-          ? `<p class="zh-line">${esc(item.zh)}</p>${item.tip ? `<p class="muted">${esc(item.tip)}</p>` : ""}`
-          : `<button class="primary" data-reveal>显示中文</button>`
+          ? `<p class="zh-line">${esc(item.zh)}</p>
+             ${item.ex ? `<p class="example">${highlightWord(item.ex, item.en)}</p>
+             <p class="muted">${esc(item.exZh || "")}</p>` : ""}
+             ${item.tip ? `<p class="muted tip-note">${esc(item.tip)}</p>` : ""}`
+          : `<p class="muted">点击卡片显示中文和例句</p>`
       }
     </div>
     <div class="row">
-      <button class="choice" data-flash-ok>记得</button>
-      <button class="choice" data-flash-bad>再练</button>
+      <button class="choice" data-flash-ok>记得 · 下一张</button>
+      <button class="choice" data-flash-bad>再练 · 下一张</button>
     </div>
   `;
 }
@@ -592,9 +694,10 @@ function renderQuiz() {
   return `
     ${toolbar(`互译 ${state.index + 1}/${state.round.length}`)}
     <div class="card center">
-      <p class="muted">${esc(state.quizHint || "请选择正确答案")}</p>
+      <p class="muted">${esc(state.quizHint || "请选择正确答案")}（点选后自动下一题）</p>
       <p class="big-en">${esc(prompt)}</p>
       ${item.en && !item.answer ? `<button class="ghost" data-speak="${esc(item.en)}">听发音</button>` : ""}
+      ${state.answered && item.ex ? `<p class="example">${highlightWord(item.ex, item.en)}</p>` : ""}
     </div>
     <div class="choices">
       ${options
@@ -604,12 +707,40 @@ function renderQuiz() {
             if (o === correct) cls += " ok";
             else if (o === state.selected) cls += " bad";
           } else if (o === state.selected) cls += " on";
-          return `<button class="${cls}" data-quiz="${esc(o)}">${esc(o)}</button>`;
+          return `<button class="${cls}" data-quiz="${esc(o)}" ${state.answered ? "disabled" : ""}>${esc(o)}</button>`;
         })
         .join("")}
     </div>
     ${feedbackBlock()}
-    ${nextBtn()}
+  `;
+}
+
+function renderContext() {
+  const item = current();
+  const correct = state.quizCorrect;
+  const options = state.quizOptions || [];
+  return `
+    ${toolbar(`语境 ${state.index + 1}/${state.round.length}`)}
+    <div class="card">
+      <p class="muted">${esc(state.quizHint)}（点选后自动下一题）</p>
+      <p class="example big-example">${highlightWord(item.ex, item.en)}</p>
+      <button class="ghost" data-speak="${esc(item.ex)}">听整句</button>
+      ${state.answered ? `<p class="zh-line">${esc(item.en)} = ${esc(item.zh)}</p>
+        <p class="muted">${esc(item.exZh || "")}</p>` : ""}
+    </div>
+    <div class="choices">
+      ${options
+        .map((o) => {
+          let cls = "choice";
+          if (state.answered) {
+            if (o === correct) cls += " ok";
+            else if (o === state.selected) cls += " bad";
+          }
+          return `<button class="${cls}" data-quiz="${esc(o)}" ${state.answered ? "disabled" : ""}>${esc(o)}</button>`;
+        })
+        .join("")}
+    </div>
+    ${feedbackBlock()}
   `;
 }
 
@@ -648,15 +779,20 @@ function renderSpell() {
   return `
     ${toolbar(`拼写 ${state.index + 1}/${state.round.length}`)}
     <div class="card center">
-      <p class="muted">根据中文拼出英文单词</p>
+      <p class="muted">根据中文拼出英文（不显示英文提示）</p>
       <p class="zh-line">${esc(item.zh)}</p>
-      ${item.tip ? `<p class="muted">${esc(item.tip)}</p>` : ""}
+      <p class="muted">${esc(item.pos || "")}</p>
       <input class="spell" id="spellInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value="${esc(state.spellInput)}" ${state.answered ? "disabled" : ""} placeholder="输入英文" />
       ${!state.answered ? `<button class="primary" data-check-spell>检查</button>` : ""}
-      ${state.answered ? `<button class="ghost" data-speak="${esc(item.en)}">听发音</button>` : ""}
+      ${
+        state.answered
+          ? `<button class="ghost" data-speak="${esc(item.en)}">听发音</button>
+             ${item.ex ? `<p class="example">${highlightWord(item.ex, item.en)}</p>
+             <p class="muted">${esc(item.exZh || "")}</p>` : ""}`
+          : ""
+      }
     </div>
     ${feedbackBlock()}
-    ${nextBtn()}
   `;
 }
 
@@ -667,9 +803,11 @@ function renderPhrase() {
   return `
     ${toolbar(`短语 ${state.index + 1}/${state.round.length}`)}
     <div class="card center">
-      <p class="muted">${esc(state.quizHint || "这个短语是什么意思？")}</p>
+      <p class="muted">${esc(state.quizHint || "这个短语是什么意思？")}（点选后自动下一题）</p>
       <p class="big-en">${esc(item.en)}</p>
       <button class="ghost" data-speak="${esc(item.en)}">听发音</button>
+      ${state.answered && item.ex ? `<p class="example">${highlightWord(item.ex, item.en)}</p>
+        <p class="muted">${esc(item.exZh || "")}</p>` : ""}
     </div>
     <div class="choices">
       ${options
@@ -679,12 +817,11 @@ function renderPhrase() {
             if (o === correct) cls += " ok";
             else if (o === state.selected) cls += " bad";
           }
-          return `<button class="${cls}" data-quiz="${esc(o)}">${esc(o)}</button>`;
+          return `<button class="${cls}" data-quiz="${esc(o)}" ${state.answered ? "disabled" : ""}>${esc(o)}</button>`;
         })
         .join("")}
     </div>
     ${feedbackBlock()}
-    ${nextBtn()}
   `;
 }
 
@@ -698,7 +835,7 @@ function renderGrammar() {
       <p class="muted">${esc(g.tip)}</p>
     </div>
     <div class="card">
-      <p class="muted">${esc(item.zh || "")}</p>
+      <p class="muted">${esc(item.zh || "")}（点选后自动下一题）</p>
       <p class="big-en prompt-line">${esc(item.prompt)}</p>
     </div>
     <div class="choices">
@@ -709,12 +846,11 @@ function renderGrammar() {
             if (o === item.answer) cls += " ok";
             else if (o === state.selected) cls += " bad";
           }
-          return `<button class="${cls}" data-grammar="${esc(o)}">${esc(o)}</button>`;
+          return `<button class="${cls}" data-grammar="${esc(o)}" ${state.answered ? "disabled" : ""}>${esc(o)}</button>`;
         })
         .join("")}
     </div>
     ${feedbackBlock()}
-    ${nextBtn()}
   `;
 }
 
@@ -890,6 +1026,8 @@ function renderGame() {
     case "quiz":
     case "review":
       return renderQuiz();
+    case "context":
+      return renderContext();
     case "match":
       return renderMatch();
     case "spell":
@@ -936,6 +1074,15 @@ function bind() {
     el.addEventListener("click", () => {
       state.flashShow = true;
       render();
+    }),
+  );
+  document.querySelectorAll("[data-flash-tap]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-speak]")) return;
+      if (!state.flashShow) {
+        state.flashShow = true;
+        render();
+      }
     }),
   );
   document.querySelectorAll("[data-flash-ok]").forEach((el) =>

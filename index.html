@@ -350,7 +350,23 @@
       line-height: 1.7;
       font-size: 1.05rem;
     }
-    .result h1 { margin-top: 6px; }
+    .example {
+  margin: 12px 0 6px;
+  line-height: 1.55;
+  font-size: 1.05rem;
+  text-align: left;
+}
+.big-example { font-size: 1.2rem; }
+.example mark, .big-example mark {
+  background: var(--sun-soft);
+  color: var(--ink);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+.tip-note { font-size: 0.9rem; }
+.flash-card { cursor: pointer; }
+.choice:disabled { opacity: 0.95; }
     @media (max-width: 520px) {
       html { font-size: 16px; }
       .games { grid-template-columns: 1fr; }
