@@ -468,6 +468,7 @@
   border-radius: 18px;
   overflow: hidden;
   border: 1px solid var(--line);
+  touch-action: none;
   background:
     radial-gradient(circle at 50% 110%, rgba(232,163,23,0.25), transparent 40%),
     linear-gradient(180deg, #d7efe9 0%, #eef7f4 55%, #cfe4de 100%);
@@ -549,30 +550,90 @@
   z-index: 5;
   pointer-events: none;
 }
+.gun-aim-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.gun-laser {
+  stroke: rgba(201, 68, 58, 0.55);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+}
+.gun-crosshair {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 2px solid #c9443a;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 4;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.7);
+}
+.gun-crosshair::before,
+.gun-crosshair::after {
+  content: "";
+  position: absolute;
+  background: #c9443a;
+  left: 50%;
+  top: 50%;
+}
+.gun-crosshair::before {
+  width: 2px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+}
+.gun-crosshair::after {
+  width: 34px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+}
 .gun-muzzle {
   position: absolute;
   left: 50%;
-  bottom: 10px;
-  width: 54px;
-  height: 28px;
-  transform: translateX(-50%);
-  border-radius: 10px 10px 4px 4px;
+  bottom: 6px;
+  width: 52px;
+  height: 78px;
+  transform: translateX(-50%) rotate(0deg);
+  transform-origin: 50% 82%;
+  z-index: 6;
+  pointer-events: none;
+}
+.gun-barrel {
+  width: 12px;
+  height: 42px;
+  margin: 0 auto;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, #3a5a63, #17333a);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+}
+.gun-body {
+  width: 44px;
+  height: 26px;
+  margin: -4px auto 0;
+  border-radius: 8px 8px 6px 6px;
   background: #17333a;
-  opacity: 0.85;
+  position: relative;
 }
-.gun-muzzle.on {
-  box-shadow: 0 -8px 18px #e8a317;
-}
-.gun-muzzle::after {
+.gun-body::after {
   content: "";
   position: absolute;
-  left: 50%;
-  top: -10px;
-  width: 8px;
+  right: 6px;
+  top: 6px;
+  width: 10px;
   height: 14px;
-  transform: translateX(-50%);
-  background: #2a4a52;
   border-radius: 2px;
+  background: #2a4a52;
+}
+.gun-muzzle.on .gun-barrel {
+  box-shadow: 0 -10px 18px #e8a317, inset 0 0 0 1px rgba(255,255,255,0.12);
+}
+.gun-range {
+  touch-action: none;
 }
 .progress-board h3 {
   margin: 0 0 8px;

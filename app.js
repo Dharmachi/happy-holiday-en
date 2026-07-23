@@ -863,6 +863,9 @@ function startGunRun() {
     bullet: null,
     flash: false,
     lastTs: 0,
+    aim: { x: 50, y: 35 },
+    muzzleX: 50,
+    angle: 0,
   };
   markPlayed("gun");
   spawnGunWave();
@@ -967,32 +970,96 @@ function gunTick(ts) {
   gunRaf = requestAnimationFrame(gunTick);
 }
 
+function updateGunAimFromEvent(e) {
+  const g = state.gun;
+  const arena = document.getElementById("gunRange");
+  if (!g || !arena) return;
+  const point = e.touches && e.touches[0] ? e.touches[0] : e;
+  if (point.clientX == null) return;
+  const rect = arena.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = ((point.clientX - rect.left) / rect.width) * 100;
+  const y = ((point.clientY - rect.top) / rect.height) * 100;
+  g.aim = {
+    x: Math.max(0, Math.min(100, x)),
+    y: Math.max(0, Math.min(88, y)),
+  };
+  g.muzzleX = Math.max(10, Math.min(90, g.aim.x));
+  // 枪口默认朝上，按瞄准点旋转
+  const mx = g.muzzleX;
+  const my = 90;
+  g.angle = (Math.atan2(g.aim.x - mx, my - g.aim.y) * 180) / Math.PI;
+  applyGunAimDom();
+}
+
+function applyGunAimDom() {
+  const g = state.gun;
+  if (!g || !g.aim) return;
+  const muzzle = document.getElementById("gunMuzzle");
+  const cross = document.getElementById("gunCrosshair");
+  const laser = document.getElementById("gunLaser");
+  const arena = document.getElementById("gunRange");
+  if (muzzle) {
+    muzzle.style.left = `${g.muzzleX}%`;
+    muzzle.style.transform = `translateX(-50%) rotate(${g.angle || 0}deg)`;
+  }
+  if (cross) {
+    cross.style.left = `${g.aim.x}%`;
+    cross.style.top = `${g.aim.y}%`;
+  }
+  if (laser && arena) {
+    const w = arena.clientWidth || 1;
+    const h = arena.clientHeight || 1;
+    const x1 = (g.muzzleX / 100) * w;
+    const y1 = h * 0.9;
+    const x2 = (g.aim.x / 100) * w;
+    const y2 = (g.aim.y / 100) * h;
+    laser.setAttribute("x1", String(x1));
+    laser.setAttribute("y1", String(y1));
+    laser.setAttribute("x2", String(x2));
+    laser.setAttribute("y2", String(y2));
+  }
+}
+
+function bindGunAim() {
+  const arena = document.getElementById("gunRange");
+  if (!arena || arena.dataset.aimBound === "1") return;
+  arena.dataset.aimBound = "1";
+  const move = (e) => {
+    if (e.cancelable && e.type.startsWith("touch")) e.preventDefault();
+    updateGunAimFromEvent(e);
+  };
+  arena.addEventListener("pointermove", move, { passive: true });
+  arena.addEventListener("mousemove", move, { passive: true });
+  arena.addEventListener("touchmove", move, { passive: false });
+  applyGunAimDom();
+}
+
 function fireGun(targetId, clientX, clientY) {
   const g = state.gun;
   if (!g || g.locked || !g.mission) return;
   const target = g.targets.find((t) => t.id === targetId && !t.hit);
   if (!target) return;
 
+  if (clientX != null && clientY != null) {
+    updateGunAimFromEvent({ clientX, clientY });
+  }
+
   g.locked = true;
   g.flash = true;
 
-  const arena = document.getElementById("gunRange");
-  let x1 = target.x + 6;
-  let y1 = target.y + 4;
-  if (arena) {
-    const rect = arena.getBoundingClientRect();
-    if (clientX != null && clientY != null && rect.width && rect.height) {
-      x1 = ((clientX - rect.left) / rect.width) * 100;
-      y1 = ((clientY - rect.top) / rect.height) * 100;
-    }
-  }
-  g.bullet = { x0: 50, y0: 92, x1, y1, t: 0 };
+  const x1 = target.x;
+  const y1 = target.y;
+  const x0 = g.muzzleX != null ? g.muzzleX : 50;
+  const y0 = 90;
+  g.bullet = { x0, y0, x1, y1, t: 0 };
 
   render();
-  // keep animation nodes updated
   stopGunLoop();
   g.lastTs = 0;
   gunRaf = requestAnimationFrame(gunTick);
+  bindGunAim();
+  applyGunAimDom();
 
   setTimeout(() => {
     if (!state.gun || state.game !== "gun") return;
@@ -1007,11 +1074,11 @@ function fireGun(targetId, clientX, clientY) {
       state.feedback = g.combo > 1 ? `命中！连击 x${g.combo}` : "命中！";
       state.feedbackOk = true;
       markCorrect(g.mission.item);
-      // clear other targets visually
       g.targets.forEach((t) => {
         if (!t.isAnswer) t.hit = true;
       });
       render();
+      bindGunAim();
       setTimeout(() => {
         if (!state.gun || state.game !== "gun") return;
         spawnGunWave();
@@ -1020,6 +1087,7 @@ function fireGun(targetId, clientX, clientY) {
         stopGunLoop();
         state.gun.lastTs = 0;
         gunRaf = requestAnimationFrame(gunTick);
+        bindGunAim();
       }, 700);
     } else {
       g.combo = 0;
@@ -1028,6 +1096,7 @@ function fireGun(targetId, clientX, clientY) {
       state.feedbackOk = false;
       addWrong(g.mission.item);
       render();
+      bindGunAim();
       setTimeout(() => {
         if (!state.gun || state.game !== "gun") return;
         if (state.gun.lives <= 0) {
@@ -1039,6 +1108,7 @@ function fireGun(targetId, clientX, clientY) {
         stopGunLoop();
         state.gun.lastTs = 0;
         gunRaf = requestAnimationFrame(gunTick);
+        bindGunAim();
       }, 900);
     }
   }, 280);
@@ -1938,11 +2008,15 @@ function renderGun() {
       <span class="chip">连击 ${g.combo}</span>
     </div>
     <div class="card soft gun-mission">
-      <p class="muted">瞄准并点击正确英文靶子</p>
+      <p class="muted">移动鼠标/手指瞄准，再点击正确英文靶子开枪</p>
       <p class="zh-line">${esc(g.mission.zh)}</p>
       <button class="ghost" data-speak="${esc(g.mission.speak)}">听答案发音</button>
     </div>
     <div class="gun-range ${g.flash ? "flashing" : ""}" id="gunRange">
+      <svg class="gun-aim-layer" id="gunAimLayer" aria-hidden="true">
+        <line id="gunLaser" class="gun-laser" x1="0" y1="0" x2="0" y2="0"></line>
+      </svg>
+      <div class="gun-crosshair" id="gunCrosshair" style="left:${g.aim ? g.aim.x : 50}%;top:${g.aim ? g.aim.y : 35}%"></div>
       ${g.targets
         .filter((t) => !t.hit || t.boom)
         .map(
@@ -1962,10 +2036,13 @@ function renderGun() {
           ? `<div class="gun-bullet" id="gunBullet" style="left:${g.bullet.x0}%;top:${g.bullet.y0}%"></div>`
           : `<div class="gun-bullet" id="gunBullet" style="display:none"></div>`
       }
-      <div class="gun-muzzle ${g.flash ? "on" : ""}"></div>
+      <div class="gun-muzzle ${g.flash ? "on" : ""}" id="gunMuzzle" style="left:${g.muzzleX != null ? g.muzzleX : 50}%; transform: translateX(-50%) rotate(${g.angle || 0}deg)">
+        <div class="gun-barrel"></div>
+        <div class="gun-body"></div>
+      </div>
     </div>
     ${feedbackBlock()}
-    <p class="muted center-tip">提示：点动物或鬼脸身上的单词开枪；点错会扣生命。</p>
+    <p class="muted center-tip">提示：枪口会跟随鼠标瞄准；点中正确单词开枪。</p>
   `;
 }
 
@@ -2410,6 +2487,7 @@ function bind() {
       fireGun(id, e.clientX, e.clientY);
     }),
   );
+  if (state.game === "gun") bindGunAim();
   document.querySelectorAll("[data-shoot]").forEach((el) =>
     el.addEventListener("click", () => answerShoot(el.getAttribute("data-shoot"))),
   );
