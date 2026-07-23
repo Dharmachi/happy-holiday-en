@@ -13,7 +13,7 @@ const SRS_DAYS = [1, 2, 4, 7, 15, 30];
 
 const GAMES = [
   { id: "pk", title: "双人 PK", desc: "同屏抢答，比比谁更快", cat: "对战" },
-  { id: "gun", title: "单词打靶", desc: "瞄准正确单词开枪", cat: "闯关" },
+  { id: "gun", title: "开枪打靶", desc: "点靶子开枪打正确单词", cat: "闯关" },
   { id: "shoot", title: "词块坠落", desc: "落地前选对中文", cat: "闯关" },
   { id: "flash", title: "单词闪卡", desc: "点选后自动下一张", cat: "单词" },
   { id: "quiz", title: "中英互译", desc: "点选后自动下一题", cat: "单词" },
@@ -1635,6 +1635,12 @@ function renderHome() {
         : ""
     }
 
+    <section class="card soft feature-gun">
+      <h2>开枪打靶</h2>
+      <p class="muted">靶场里飘着英文单词，对准中文意思对应的靶子点一下，就会开枪命中。</p>
+      <button class="primary" data-start="gun">进入开枪打靶</button>
+    </section>
+
     <section class="card soft">
       <h2>本单元目标</h2>
       <p class="muted">大问题：${esc(u.bigQuestionZh)}</p>
@@ -1903,11 +1909,11 @@ function renderPhrase() {
 function renderGun() {
   const g = state.gun;
   if (!g || !g.mission) {
-    return `${toolbar("单词打靶")}<div class="card"><p class="muted">准备中…</p></div>`;
+    return `${toolbar("开枪打靶")}<div class="card"><p class="muted">准备中…</p></div>`;
   }
   const hearts = "♥".repeat(Math.max(0, g.lives)) + "♡".repeat(Math.max(0, 3 - g.lives));
   return `
-    ${toolbar("单词打靶")}
+    ${toolbar("开枪打靶")}
     <div class="shoot-hud">
       <span class="chip">生命 ${hearts}</span>
       <span class="chip">命中 ${g.hits}</span>
