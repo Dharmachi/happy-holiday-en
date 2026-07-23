@@ -451,6 +451,109 @@
   align-items: center;
   margin: 12px 0;
 }
+.gun-mission { text-align: center; }
+.gun-range {
+  position: relative;
+  height: min(48vh, 420px);
+  min-height: 300px;
+  margin: 10px 0;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 50% 110%, rgba(232,163,23,0.25), transparent 40%),
+    linear-gradient(180deg, #d7efe9 0%, #eef7f4 55%, #cfe4de 100%);
+}
+.gun-range.flashing {
+  box-shadow: inset 0 0 0 3px rgba(232, 163, 23, 0.45);
+}
+.gun-target {
+  position: absolute;
+  width: 96px;
+  min-height: 72px;
+  border: 0;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: crosshair;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+}
+.gun-ring {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  border: 4px solid #c9443a;
+  background:
+    radial-gradient(circle, #fff 0 18%, transparent 19% 34%, #fff 35% 48%, transparent 49% 64%, #fff7 65% 78%, transparent 79%),
+    #f7f7f2;
+  box-shadow: 0 6px 14px rgba(23,51,58,0.18);
+}
+.gun-target strong {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin-top: 22px;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  max-width: 88px;
+  word-break: break-word;
+}
+.gun-target.boom .gun-ring {
+  animation: gunBoom .45s ease forwards;
+  border-color: var(--ok);
+}
+.gun-target.answer strong { color: var(--ok); font-weight: 800; }
+@keyframes gunBoom {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+.gun-bullet {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: #e8a317;
+  box-shadow: 0 0 10px #e8a317, 0 0 2px #fff;
+  z-index: 5;
+  pointer-events: none;
+}
+.gun-muzzle {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  width: 54px;
+  height: 28px;
+  transform: translateX(-50%);
+  border-radius: 10px 10px 4px 4px;
+  background: #17333a;
+  opacity: 0.85;
+}
+.gun-muzzle.on {
+  box-shadow: 0 -8px 18px #e8a317;
+}
+.gun-muzzle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -10px;
+  width: 8px;
+  height: 14px;
+  transform: translateX(-50%);
+  background: #2a4a52;
+  border-radius: 2px;
+}
+.center-tip { text-align: center; }
+@media (min-width: 768px) {
+  .gun-range { height: min(52vh, 480px); }
+  .gun-target { width: 110px; min-height: 84px; }
+  .gun-ring { width: 80px; height: 80px; }
+  .gun-target strong { font-size: 0.92rem; max-width: 100px; }
+}
 @media (min-width: 768px) {
   .pk-arena { gap: 16px; }
   .pk-opt { min-height: 64px; font-size: 1.08rem; }

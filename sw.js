@@ -1,4 +1,4 @@
-const CACHE = "happy-holiday-v5";
+const CACHE = "happy-holiday-v6";
 const ASSETS = ["./", "./index.html", "./app.js", "./data.js", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (e) => {

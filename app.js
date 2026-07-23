@@ -12,7 +12,8 @@ const SRS_DAYS = [1, 2, 4, 7, 15, 30];
 
 const GAMES = [
   { id: "pk", title: "双人 PK", desc: "同屏抢答，比比谁更快", cat: "对战" },
-  { id: "shoot", title: "词块坠落", desc: "过关打词：词·短语·句子", cat: "闯关" },
+  { id: "gun", title: "单词打靶", desc: "瞄准正确单词开枪", cat: "闯关" },
+  { id: "shoot", title: "词块坠落", desc: "落地前选对中文", cat: "闯关" },
   { id: "flash", title: "单词闪卡", desc: "点选后自动下一张", cat: "单词" },
   { id: "quiz", title: "中英互译", desc: "点选后自动下一题", cat: "单词" },
   { id: "context", title: "语境理解", desc: "在句子里理解单词", cat: "单词" },
@@ -35,6 +36,7 @@ const PK_NAMES_KEY = "hh-pk-names-v1";
 let autoNextTimer = null;
 let speakAudio = null;
 let shootRaf = null;
+let gunRaf = null;
 
 const state = {
   view: "home",
@@ -65,6 +67,7 @@ const state = {
   grammarTab: "rules",
   grammarTopicId: "indefinite",
   shoot: null,
+  gun: null,
   notebookDue: 0,
   notebookTotal: 0,
   pk: null,
@@ -431,11 +434,13 @@ function earnStars(n) {
 function goHome() {
   clearTimeout(autoNextTimer);
   stopShootLoop();
+  stopGunLoop();
   stopSpeak();
   state.view = "home";
   state.game = null;
   state.feedback = "";
   state.shoot = null;
+  state.gun = null;
   state.pk = null;
   refreshNotebookStats();
   render();
@@ -487,6 +492,10 @@ function startGame(gameId) {
   }
   if (gameId === "pk") {
     startPkSetup();
+    return;
+  }
+  if (gameId === "gun") {
+    startGunRun();
     return;
   }
   state.view = "game";
@@ -642,6 +651,208 @@ function finishShoot(won) {
   state.score = s.cleared;
   state.view = "result";
   state.feedback = won ? "全部击落，过关成功！" : "生命用尽，再试一次！";
+  state.feedbackOk = won;
+  render();
+}
+
+const GUN_WAVES = 12;
+
+function stopGunLoop() {
+  if (gunRaf) cancelAnimationFrame(gunRaf);
+  gunRaf = null;
+}
+
+function startGunRun() {
+  stopGunLoop();
+  clearTimeout(autoNextTimer);
+  state.view = "game";
+  state.game = "gun";
+  state.score = 0;
+  state.feedback = "";
+  state.gun = {
+    lives: 3,
+    hits: 0,
+    combo: 0,
+    wave: 0,
+    locked: false,
+    mission: null,
+    targets: [],
+    bullet: null,
+    flash: false,
+    lastTs: 0,
+  };
+  markPlayed("gun");
+  spawnGunWave();
+  render();
+  gunRaf = requestAnimationFrame(gunTick);
+}
+
+function spawnGunWave() {
+  const g = state.gun;
+  if (!g) return;
+  if (g.wave >= GUN_WAVES) {
+    finishGun(true);
+    return;
+  }
+  g.wave += 1;
+  g.locked = false;
+  g.bullet = null;
+  g.flash = false;
+  const answerItem = pick(allVocab(), 1)[0];
+  const decoys = pick(
+    allVocab().filter((x) => x.en !== answerItem.en),
+    4,
+  );
+  const targets = shuffle([answerItem, ...decoys]).map((item, i) => ({
+    id: `${g.wave}-${i}-${item.en}`,
+    en: item.en,
+    zh: item.zh,
+    item,
+    isAnswer: item.en === answerItem.en,
+    x: 8 + Math.random() * 72,
+    y: 8 + Math.random() * 42,
+    vx: (Math.random() * 2 - 1) * (18 + g.wave * 1.2),
+    vy: (Math.random() * 2 - 1) * (12 + g.wave),
+    hit: false,
+    boom: false,
+  }));
+  g.mission = {
+    zh: answerItem.zh,
+    en: answerItem.en,
+    speak: answerItem.en,
+    item: answerItem,
+  };
+  g.targets = targets;
+  state.feedback = "";
+}
+
+function gunTick(ts) {
+  if (state.game !== "gun" || !state.gun || state.view !== "game") return;
+  const g = state.gun;
+  if (!g.lastTs) g.lastTs = ts;
+  const dt = Math.min(0.05, (ts - g.lastTs) / 1000);
+  g.lastTs = ts;
+
+  if (!g.locked) {
+    g.targets.forEach((t) => {
+      if (t.hit) return;
+      t.x += t.vx * dt;
+      t.y += t.vy * dt;
+      if (t.x < 2 || t.x > 78) t.vx *= -1;
+      if (t.y < 2 || t.y > 58) t.vy *= -1;
+      t.x = Math.max(2, Math.min(78, t.x));
+      t.y = Math.max(2, Math.min(58, t.y));
+      const node = document.querySelector(`[data-gun-id="${CSS && CSS.escape ? CSS.escape(t.id) : t.id.replace(/"/g, "")}"]`);
+      if (node) {
+        node.style.left = `${t.x}%`;
+        node.style.top = `${t.y}%`;
+      }
+    });
+  }
+
+  if (g.bullet) {
+    g.bullet.t += dt * 3.2;
+    const b = document.getElementById("gunBullet");
+    if (b) {
+      const p = Math.min(1, g.bullet.t);
+      const x = g.bullet.x0 + (g.bullet.x1 - g.bullet.x0) * p;
+      const y = g.bullet.y0 + (g.bullet.y1 - g.bullet.y0) * p;
+      b.style.left = `${x}%`;
+      b.style.top = `${y}%`;
+      b.style.opacity = String(1 - p * 0.2);
+    }
+    if (g.bullet.t >= 1) g.bullet = null;
+  }
+
+  gunRaf = requestAnimationFrame(gunTick);
+}
+
+function fireGun(targetId, clientX, clientY) {
+  const g = state.gun;
+  if (!g || g.locked || !g.mission) return;
+  const target = g.targets.find((t) => t.id === targetId && !t.hit);
+  if (!target) return;
+
+  g.locked = true;
+  g.flash = true;
+
+  const arena = document.getElementById("gunRange");
+  let x1 = target.x + 6;
+  let y1 = target.y + 4;
+  if (arena) {
+    const rect = arena.getBoundingClientRect();
+    if (clientX != null && clientY != null && rect.width && rect.height) {
+      x1 = ((clientX - rect.left) / rect.width) * 100;
+      y1 = ((clientY - rect.top) / rect.height) * 100;
+    }
+  }
+  g.bullet = { x0: 50, y0: 92, x1, y1, t: 0 };
+
+  render();
+  // keep animation nodes updated
+  stopGunLoop();
+  g.lastTs = 0;
+  gunRaf = requestAnimationFrame(gunTick);
+
+  setTimeout(() => {
+    if (!state.gun || state.game !== "gun") return;
+    const ok = target.isAnswer;
+    target.hit = true;
+    target.boom = true;
+    g.flash = false;
+    if (ok) {
+      g.hits += 1;
+      g.combo += 1;
+      state.score = g.hits;
+      state.feedback = g.combo > 1 ? `命中！连击 x${g.combo}` : "命中！";
+      state.feedbackOk = true;
+      markCorrect(g.mission.item);
+      // clear other targets visually
+      g.targets.forEach((t) => {
+        if (!t.isAnswer) t.hit = true;
+      });
+      render();
+      setTimeout(() => {
+        if (!state.gun || state.game !== "gun") return;
+        spawnGunWave();
+        if (state.view === "result") return;
+        render();
+        stopGunLoop();
+        state.gun.lastTs = 0;
+        gunRaf = requestAnimationFrame(gunTick);
+      }, 700);
+    } else {
+      g.combo = 0;
+      g.lives -= 1;
+      state.feedback = `打偏了！应打：${g.mission.en}`;
+      state.feedbackOk = false;
+      addWrong(g.mission.item);
+      render();
+      setTimeout(() => {
+        if (!state.gun || state.game !== "gun") return;
+        if (state.gun.lives <= 0) {
+          finishGun(false);
+          return;
+        }
+        spawnGunWave();
+        render();
+        stopGunLoop();
+        state.gun.lastTs = 0;
+        gunRaf = requestAnimationFrame(gunTick);
+      }, 900);
+    }
+  }, 280);
+}
+
+function finishGun(won) {
+  stopGunLoop();
+  const g = state.gun;
+  if (!g) return;
+  const bonus = won ? 6 + Math.floor(g.hits / 2) : Math.max(1, Math.floor(g.hits / 2));
+  earnStars(bonus);
+  state.score = g.hits;
+  state.view = "result";
+  state.feedback = won ? "全部靶子打完，神枪手！" : "弹药耗尽，再练一局！";
   state.feedbackOk = won;
   render();
 }
@@ -1489,6 +1700,52 @@ function renderPhrase() {
   `;
 }
 
+function renderGun() {
+  const g = state.gun;
+  if (!g || !g.mission) {
+    return `${toolbar("单词打靶")}<div class="card"><p class="muted">准备中…</p></div>`;
+  }
+  const hearts = "♥".repeat(Math.max(0, g.lives)) + "♡".repeat(Math.max(0, 3 - g.lives));
+  return `
+    ${toolbar("单词打靶")}
+    <div class="shoot-hud">
+      <span class="chip">生命 ${hearts}</span>
+      <span class="chip">命中 ${g.hits}</span>
+      <span class="chip">波次 ${g.wave}/${GUN_WAVES}</span>
+      <span class="chip">连击 ${g.combo}</span>
+    </div>
+    <div class="card soft gun-mission">
+      <p class="muted">瞄准并点击正确英文靶子</p>
+      <p class="zh-line">${esc(g.mission.zh)}</p>
+      <button class="ghost" data-speak="${esc(g.mission.speak)}">听答案发音</button>
+    </div>
+    <div class="gun-range ${g.flash ? "flashing" : ""}" id="gunRange">
+      ${g.targets
+        .filter((t) => !t.hit || t.boom)
+        .map(
+          (t) => `
+        <button class="gun-target ${t.boom ? "boom" : ""} ${t.isAnswer && g.locked && t.boom ? "answer" : ""}"
+          data-gun-id="${esc(t.id)}"
+          data-gun-fire="${esc(t.id)}"
+          style="left:${t.x}%;top:${t.y}%"
+          ${g.locked ? "disabled" : ""}>
+          <span class="gun-ring"></span>
+          <strong>${esc(t.en)}</strong>
+        </button>`,
+        )
+        .join("")}
+      ${
+        g.bullet
+          ? `<div class="gun-bullet" id="gunBullet" style="left:${g.bullet.x0}%;top:${g.bullet.y0}%"></div>`
+          : `<div class="gun-bullet" id="gunBullet" style="display:none"></div>`
+      }
+      <div class="gun-muzzle ${g.flash ? "on" : ""}"></div>
+    </div>
+    ${feedbackBlock()}
+    <p class="muted center-tip">提示：点中靶子会开枪；点错会扣生命。</p>
+  `;
+}
+
 function renderShoot() {
   const s = state.shoot;
   if (!s || !s.current) {
@@ -1863,6 +2120,8 @@ function renderGame() {
   switch (state.game) {
     case "pk":
       return renderPk();
+    case "gun":
+      return renderGun();
     case "shoot":
       return renderShoot();
     case "flash":
@@ -1920,6 +2179,12 @@ function bind() {
   document.querySelectorAll("[data-pk-side]").forEach((el) =>
     el.addEventListener("click", () => {
       answerPk(el.getAttribute("data-pk-side"), el.getAttribute("data-pk-choice"));
+    }),
+  );
+  document.querySelectorAll("[data-gun-fire]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      const id = el.getAttribute("data-gun-fire");
+      fireGun(id, e.clientX, e.clientY);
     }),
   );
   document.querySelectorAll("[data-shoot]").forEach((el) =>
