@@ -477,8 +477,8 @@
 }
 .gun-target {
   position: absolute;
-  width: 96px;
-  min-height: 72px;
+  width: 118px;
+  min-height: 118px;
   border: 0;
   background: transparent;
   transform: translate(-50%, -50%);
@@ -486,33 +486,52 @@
   padding: 0;
   font: inherit;
   color: var(--ink);
+  display: grid;
+  place-items: center;
 }
-.gun-ring {
+.gun-target.long { width: 138px; min-height: 132px; }
+.gun-face {
   position: absolute;
   inset: 0;
-  margin: auto;
-  width: 70px;
-  height: 70px;
-  border-radius: 50%;
-  border: 4px solid #c9443a;
-  background:
-    radial-gradient(circle, #fff 0 18%, transparent 19% 34%, #fff 35% 48%, transparent 49% 64%, #fff7 65% 78%, transparent 79%),
-    #f7f7f2;
-  box-shadow: 0 6px 14px rgba(23,51,58,0.18);
+  display: grid;
+  place-items: center;
+  font-size: 4.2rem;
+  line-height: 1;
+  filter: drop-shadow(0 6px 10px rgba(23,51,58,0.18));
+  pointer-events: none;
 }
-.gun-target strong {
+.gun-target.long .gun-face { font-size: 4.6rem; }
+.gun-word {
   position: relative;
   z-index: 1;
-  display: block;
-  margin-top: 22px;
-  font-size: 0.82rem;
-  line-height: 1.2;
-  max-width: 88px;
-  word-break: break-word;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 78%;
+  min-height: 42%;
+  margin-top: 34%;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.92);
+  border: 2px solid rgba(201,68,58,0.55);
+  box-shadow: 0 2px 8px rgba(23,51,58,0.12);
 }
-.gun-target.boom .gun-ring {
+.gun-word strong {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+.gun-target.long .gun-word strong { font-size: 0.72rem; }
+.gun-target.boom .gun-face,
+.gun-target.boom .gun-word {
   animation: gunBoom .45s ease forwards;
+}
+.gun-target.answer .gun-word {
   border-color: var(--ok);
+  background: #e5f5ea;
 }
 .gun-target.answer strong { color: var(--ok); font-weight: 800; }
 @keyframes gunBoom {
@@ -601,9 +620,11 @@
 .prog-fill.master { background: linear-gradient(90deg, #e8a317, #d45b45); }
 @media (min-width: 768px) {
   .gun-range { height: min(52vh, 480px); }
-  .gun-target { width: 110px; min-height: 84px; }
-  .gun-ring { width: 80px; height: 80px; }
-  .gun-target strong { font-size: 0.92rem; max-width: 100px; }
+  .gun-target { width: 132px; min-height: 132px; }
+  .gun-target.long { width: 152px; min-height: 146px; }
+  .gun-face { font-size: 4.8rem; }
+  .gun-target.long .gun-face { font-size: 5.2rem; }
+  .gun-word strong { font-size: 0.88rem; }
 }
 @media (min-width: 768px) {
   .pk-arena { gap: 16px; }

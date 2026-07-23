@@ -870,6 +870,21 @@ function startGunRun() {
   gunRaf = requestAnimationFrame(gunTick);
 }
 
+const GUN_FACES = [
+  "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
+  "🦁", "🐮", "🐷", "🐸", "🐵", "🦄", "🐙", "🦋", "🐝", "🐥",
+  "👻", "🎃", "😈", "🤡", "👽", "🤖", "💀", "👹", "👺", "🤪",
+  "😜", "🥳", "😎", "🤓", "😺", "🙀",
+];
+
+function pickGunFace(used) {
+  const pool = GUN_FACES.filter((f) => !used.has(f));
+  const list = pool.length ? pool : GUN_FACES;
+  const face = list[Math.floor(Math.random() * list.length)];
+  used.add(face);
+  return face;
+}
+
 function spawnGunWave() {
   const g = state.gun;
   if (!g) return;
@@ -886,16 +901,18 @@ function spawnGunWave() {
     allVocab().filter((x) => x.en !== answerItem.en),
     4,
   );
+  const usedFaces = new Set();
   const targets = shuffle([answerItem, ...decoys]).map((item, i) => ({
     id: `${g.wave}-${i}-${item.en}`,
     en: item.en,
     zh: item.zh,
     item,
     isAnswer: item.en === answerItem.en,
-    x: 8 + Math.random() * 72,
-    y: 8 + Math.random() * 42,
-    vx: (Math.random() * 2 - 1) * (18 + g.wave * 1.2),
-    vy: (Math.random() * 2 - 1) * (12 + g.wave),
+    face: pickGunFace(usedFaces),
+    x: 10 + Math.random() * 70,
+    y: 12 + Math.random() * 40,
+    vx: (Math.random() * 2 - 1) * (16 + g.wave * 1.1),
+    vy: (Math.random() * 2 - 1) * (10 + g.wave * 0.8),
     hit: false,
     boom: false,
   }));
@@ -1930,13 +1947,13 @@ function renderGun() {
         .filter((t) => !t.hit || t.boom)
         .map(
           (t) => `
-        <button class="gun-target ${t.boom ? "boom" : ""} ${t.isAnswer && g.locked && t.boom ? "answer" : ""}"
+        <button class="gun-target ${t.boom ? "boom" : ""} ${t.isAnswer && g.locked && t.boom ? "answer" : ""} ${String(t.en).length > 10 ? "long" : ""}"
           data-gun-id="${esc(t.id)}"
           data-gun-fire="${esc(t.id)}"
           style="left:${t.x}%;top:${t.y}%"
           ${g.locked ? "disabled" : ""}>
-          <span class="gun-ring"></span>
-          <strong>${esc(t.en)}</strong>
+          <span class="gun-face" aria-hidden="true">${t.face || "🎯"}</span>
+          <span class="gun-word"><strong>${esc(t.en)}</strong></span>
         </button>`,
         )
         .join("")}
@@ -1948,7 +1965,7 @@ function renderGun() {
       <div class="gun-muzzle ${g.flash ? "on" : ""}"></div>
     </div>
     ${feedbackBlock()}
-    <p class="muted center-tip">提示：点中靶子会开枪；点错会扣生命。</p>
+    <p class="muted center-tip">提示：点动物或鬼脸身上的单词开枪；点错会扣生命。</p>
   `;
 }
 
