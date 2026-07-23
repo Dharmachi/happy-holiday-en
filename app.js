@@ -1,10 +1,14 @@
 const STAR_KEY = "hh-stars-v1";
 const WRONG_KEY = "hh-wrong-v1";
+const NOTEBOOK_KEY = "hh-notebook-v1";
 const PROGRESS_KEY = "hh-progress-v1";
 const ROUND = 12;
 const MATCH_N = 8;
 const AUTO_NEXT_OK = 700;
 const AUTO_NEXT_BAD = 1200;
+
+/** 记忆曲线间隔（天）：答对后进入下一档 */
+const SRS_DAYS = [1, 2, 4, 7, 15, 30];
 
 const GAMES = [
   { id: "shoot", title: "词块坠落", desc: "过关打词：词·短语·句子", cat: "闯关" },
@@ -19,6 +23,8 @@ const GAMES = [
   { id: "cloze", title: "课文挖空", desc: "同一材料反复练", cat: "课文" },
   { id: "order", title: "事件排序", desc: "按时间排行程", cat: "课文" },
   { id: "read", title: "课文朗读", desc: "读课文、看笔记", cat: "课文" },
+  { id: "notebookReview", title: "生词本复习", desc: "按记忆曲线复习不会的词", cat: "复习" },
+  { id: "notebook", title: "我的生词本", desc: "查看、删除、看下次复习", cat: "复习" },
   { id: "review", title: "错题本", desc: "专攻错过的题", cat: "复习" },
 ];
 
@@ -55,6 +61,8 @@ const state = {
   grammarTab: "rules",
   grammarTopicId: "indefinite",
   shoot: null,
+  notebookDue: 0,
+  notebookTotal: 0,
 };
 
 function loadStars() {
@@ -225,6 +233,146 @@ function itemKey(item) {
   return `${item.kind || "word"}:${item.en}`;
 }
 
+function loadNotebook() {
+  try {
+    const list = JSON.parse(localStorage.getItem(NOTEBOOK_KEY) || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveNotebook(list) {
+  localStorage.setItem(NOTEBOOK_KEY, JSON.stringify(list));
+  refreshNotebookStats();
+}
+
+function refreshNotebookStats() {
+  const list = loadNotebook();
+  const now = Date.now();
+  state.notebookTotal = list.length;
+  state.notebookDue = list.filter((x) => (x.nextReviewAt || 0) <= now).length;
+}
+
+function dayMs(n) {
+  return n * 24 * 60 * 60 * 1000;
+}
+
+function formatReviewTime(ts) {
+  const now = Date.now();
+  if (!ts || ts <= now) return "现在可复习";
+  const diff = ts - now;
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `${mins} 分钟后`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours} 小时后`;
+  const days = Math.round(hours / 24);
+  return `${days} 天后`;
+}
+
+function stageLabel(stage) {
+  const s = Math.max(0, Number(stage) || 0);
+  if (s <= 0) return "新记";
+  if (s >= SRS_DAYS.length) return "较熟";
+  return `第 ${s} 档`;
+}
+
+function isNotebookable(item) {
+  if (!item || !item.en || !item.zh) return false;
+  const kind = item.kind || "word";
+  if (kind === "order" || kind === "cloze" || kind === "sentence") return false;
+  return true;
+}
+
+function saveToNotebook(item, meta = {}) {
+  if (!item || !item.en) return null;
+  if (!isNotebookable(item) && !meta.force) return null;
+  const key = meta.key || itemKey(item);
+  const list = loadNotebook();
+  const i = list.findIndex((x) => x.key === key);
+  const now = Date.now();
+  if (i >= 0) {
+    list[i].stage = 0;
+    list[i].nextReviewAt = now;
+    list[i].wrongCount = (list[i].wrongCount || 0) + 1;
+    list[i].correctStreak = 0;
+    list[i].lastAt = now;
+    list[i].zh = item.zh || list[i].zh;
+    list[i].en = item.en || list[i].en;
+    list[i].ex = item.ex || list[i].ex || "";
+    list[i].exZh = item.exZh || list[i].exZh || "";
+    saveNotebook(list);
+    return list[i];
+  }
+  const row = {
+    key,
+    en: item.en,
+    zh: item.zh || "",
+    kind: item.kind || meta.kind || "word",
+    ex: item.ex || "",
+    exZh: item.exZh || "",
+    stage: 0,
+    nextReviewAt: now,
+    wrongCount: 1,
+    correctStreak: 0,
+    createdAt: now,
+    lastAt: now,
+  };
+  list.unshift(row);
+  saveNotebook(list);
+  return row;
+}
+
+function notebookAdvance(key) {
+  const list = loadNotebook();
+  const i = list.findIndex((x) => x.key === key);
+  if (i < 0) return;
+  const row = list[i];
+  const stage = Math.min(SRS_DAYS.length, (row.stage || 0) + 1);
+  row.stage = stage;
+  row.correctStreak = (row.correctStreak || 0) + 1;
+  row.lastAt = Date.now();
+  if (stage >= SRS_DAYS.length) {
+    list.splice(i, 1);
+  } else {
+    const days = SRS_DAYS[stage - 1] || 1;
+    row.nextReviewAt = Date.now() + dayMs(days);
+    list[i] = row;
+  }
+  saveNotebook(list);
+}
+
+function notebookFail(key) {
+  const list = loadNotebook();
+  const i = list.findIndex((x) => x.key === key);
+  if (i < 0) return;
+  list[i].stage = 0;
+  list[i].nextReviewAt = Date.now();
+  list[i].wrongCount = (list[i].wrongCount || 0) + 1;
+  list[i].correctStreak = 0;
+  list[i].lastAt = Date.now();
+  saveNotebook(list);
+}
+
+function removeFromNotebook(key) {
+  saveNotebook(loadNotebook().filter((x) => x.key !== key));
+}
+
+function dueNotebookItems() {
+  const now = Date.now();
+  return loadNotebook()
+    .filter((x) => (x.nextReviewAt || 0) <= now)
+    .sort((a, b) => (a.nextReviewAt || 0) - (b.nextReviewAt || 0));
+}
+
+function enrichFromUnit(row) {
+  const hit =
+    allWordLike().find((x) => x.en === row.en) ||
+    allVocab().find((x) => x.en === row.en) ||
+    allPhrases().find((x) => x.en === row.en);
+  return { ...hit, ...row, kind: row.kind || (hit && hit.kind) || "word" };
+}
+
 function addWrong(item, meta = {}) {
   if (!item || !item.en) return;
   const key = meta.key || itemKey(item);
@@ -248,6 +396,8 @@ function addWrong(item, meta = {}) {
   }
   saveWrongBook(list);
   state.wrongCount = list.length;
+  const nbItem = { ...item, kind: item.kind || meta.kind || "word", zh: item.zh || meta.prompt || "" };
+  if (isNotebookable(nbItem)) saveToNotebook(nbItem, { key });
 }
 
 function markCorrect(item, key) {
@@ -255,15 +405,17 @@ function markCorrect(item, key) {
   if (!k) return;
   let list = loadWrongBook();
   const i = list.findIndex((x) => x.key === k);
-  if (i < 0) return;
-  if (state.game === "review") {
-    list.splice(i, 1);
-  } else {
-    list[i].wrongCount = Math.max(0, (list[i].wrongCount || 1) - 1);
-    if (list[i].wrongCount <= 0) list.splice(i, 1);
+  if (i >= 0) {
+    if (state.game === "review" || state.game === "notebookReview") {
+      list.splice(i, 1);
+    } else {
+      list[i].wrongCount = Math.max(0, (list[i].wrongCount || 1) - 1);
+      if (list[i].wrongCount <= 0) list.splice(i, 1);
+    }
+    saveWrongBook(list);
+    state.wrongCount = list.length;
   }
-  saveWrongBook(list);
-  state.wrongCount = list.length;
+  if (state.game === "notebookReview") notebookAdvance(k);
 }
 
 function earnStars(n) {
@@ -312,6 +464,18 @@ function startGame(gameId) {
   stopSpeak();
   if (gameId === "review" && loadWrongBook().length === 0) {
     alert("错题本是空的，先去其他游戏练习吧！");
+    return;
+  }
+  if (gameId === "notebookReview" && dueNotebookItems().length === 0) {
+    alert(loadNotebook().length ? "今天没有到期的生词，稍后再来！" : "生词本是空的。练习时点「不会」或「加入生词本」即可收藏。");
+    return;
+  }
+  if (gameId === "notebook") {
+    state.view = "game";
+    state.game = "notebook";
+    markPlayed(gameId);
+    refreshNotebookStats();
+    render();
     return;
   }
   state.view = "game";
@@ -368,6 +532,20 @@ function startGame(gameId) {
       answer: w.answer,
       reviewKey: w.key,
     }));
+    prepareQuizCard(state.round[0]);
+  } else if (gameId === "notebookReview") {
+    const due = dueNotebookItems().slice(0, ROUND);
+    state.round = due.map((w) => {
+      const full = enrichFromUnit(w);
+      return {
+        ...full,
+        en: w.en,
+        zh: w.zh,
+        kind: w.kind || "word",
+        reviewKey: w.key,
+        notebookKey: w.key,
+      };
+    });
     prepareQuizCard(state.round[0]);
   }
   render();
@@ -661,7 +839,7 @@ function nextCard() {
   }
   if (state.game === "build") setupBuild(current());
   if (state.game === "order") setupOrder(current());
-  if (state.game === "quiz" || state.game === "review") prepareQuizCard(current());
+  if (state.game === "quiz" || state.game === "review" || state.game === "notebookReview") prepareQuizCard(current());
   if (state.game === "phrase") preparePhraseCard(current());
   if (state.game === "context") prepareContextCard(current());
   render();
@@ -685,10 +863,13 @@ function answerQuiz(choice, correct) {
   if (ok) {
     state.score += 1;
     state.feedback = "答对了！";
-    markCorrect(item, item.reviewKey);
+    markCorrect(item, item.reviewKey || item.notebookKey);
   } else {
     state.feedback = `正确答案：${correct}`;
-    addWrong(item, { answer: correct, prompt: item.zh || item.prompt });
+    addWrong(item, { answer: correct, prompt: item.zh || item.prompt, key: item.reviewKey || item.notebookKey });
+    if (state.game === "notebookReview" && (item.notebookKey || item.reviewKey)) {
+      notebookFail(item.notebookKey || item.reviewKey);
+    }
   }
   render();
   scheduleAutoNext(ok);
@@ -832,10 +1013,21 @@ function renderHome() {
       <p class="tagline">${esc(u.themeZh)} · 同一批材料，多种游戏练透</p>
       <div class="hero-meta">
         <span class="stat">★ ${state.stars}</span>
-        <span class="stat">已练 ${played} 种游戏</span>
+        <span class="stat">生词待复习 ${state.notebookDue}</span>
+        <span class="stat">生词本 ${state.notebookTotal}</span>
         <span class="stat">错题 ${state.wrongCount}</span>
       </div>
     </header>
+
+    ${
+      state.notebookDue > 0
+        ? `<section class="card soft due-banner">
+            <h2>今天有 ${state.notebookDue} 个生词到期</h2>
+            <p class="muted">按记忆曲线复习：1→2→4→7→15→30 天，答对晋级，答错打回重练。</p>
+            <button class="primary" data-start="notebookReview">开始生词本复习</button>
+          </section>`
+        : ""
+    }
 
     <section class="card soft">
       <h2>本单元目标</h2>
@@ -899,6 +1091,7 @@ function nextBtn(label = "下一题") {
 
 function renderFlash() {
   const item = current();
+  const inBook = loadNotebook().some((x) => x.key === itemKey(item));
   return `
     ${toolbar(`闪卡 ${state.index + 1}/${state.round.length}`)}
     <div class="card center flash-card" data-flash-tap>
@@ -916,8 +1109,9 @@ function renderFlash() {
     </div>
     <div class="row">
       <button class="choice" data-flash-ok>记得 · 下一张</button>
-      <button class="choice" data-flash-bad>再练 · 下一张</button>
+      <button class="choice" data-flash-bad>不会 · 下一张</button>
     </div>
+    <button class="ghost" data-add-notebook ${inBook ? "disabled" : ""}>${inBook ? "已在生词本" : "加入生词本"}</button>
   `;
 }
 
@@ -926,8 +1120,12 @@ function renderQuiz() {
   const prompt = state.quizPrompt;
   const correct = state.quizCorrect;
   const options = state.quizOptions || [];
+  const title =
+    state.game === "notebookReview"
+      ? `生词复习 ${state.index + 1}/${state.round.length}`
+      : `互译 ${state.index + 1}/${state.round.length}`;
   return `
-    ${toolbar(`互译 ${state.index + 1}/${state.round.length}`)}
+    ${toolbar(title)}
     <div class="card center">
       <p class="muted">${esc(state.quizHint || "请选择正确答案")}（点选后自动下一题）</p>
       <p class="big-en">${esc(prompt)}</p>
@@ -947,6 +1145,40 @@ function renderQuiz() {
         .join("")}
     </div>
     ${feedbackBlock()}
+  `;
+}
+
+function renderNotebook() {
+  const list = loadNotebook().slice().sort((a, b) => (a.nextReviewAt || 0) - (b.nextReviewAt || 0));
+  const due = list.filter((x) => (x.nextReviewAt || 0) <= Date.now()).length;
+  return `
+    ${toolbar("我的生词本")}
+    <div class="card soft">
+      <h2>共 ${list.length} 个 · 到期 ${due} 个</h2>
+      <p class="muted">记忆曲线：答对后分别隔 1、2、4、7、15、30 天再出现；连续走完就移出生词本。答错会立刻回到“现在可复习”。</p>
+      ${due ? `<button class="primary" data-start="notebookReview">复习到期生词</button>` : ""}
+      ${list.length ? `<button class="ghost" data-clear-notebook>清空生词本</button>` : ""}
+    </div>
+    ${
+      list.length
+        ? list
+            .map((x) => {
+              const dueNow = (x.nextReviewAt || 0) <= Date.now();
+              return `
+              <div class="card notebook-item ${dueNow ? "due" : ""}">
+                <div class="notebook-top">
+                  <strong>${esc(x.en)}</strong>
+                  <button class="mini" data-remove-notebook="${esc(x.key)}">删除</button>
+                </div>
+                <p class="zh-line" style="font-size:1.05rem;margin:6px 0">${esc(x.zh)}</p>
+                <p class="muted">${esc(stageLabel(x.stage))} · ${esc(formatReviewTime(x.nextReviewAt))} · 错过 ${x.wrongCount || 0} 次</p>
+                ${x.ex ? `<p class="example">${highlightWord(x.ex, x.en)}</p>` : ""}
+                <button class="mini" data-speak="${esc(x.en)}">听</button>
+              </div>`;
+            })
+            .join("")
+        : `<div class="card"><p class="muted">还没有生词。在闪卡点「不会」或「加入生词本」，做错题时也会自动收录。</p></div>`
+    }
   `;
 }
 
@@ -1358,7 +1590,10 @@ function renderGame() {
       return renderFlash();
     case "quiz":
     case "review":
+    case "notebookReview":
       return renderQuiz();
+    case "notebook":
+      return renderNotebook();
     case "context":
       return renderContext();
     case "match":
@@ -1452,7 +1687,33 @@ function bind() {
   document.querySelectorAll("[data-flash-bad]").forEach((el) =>
     el.addEventListener("click", () => {
       addWrong(current());
+      saveToNotebook(current());
       nextCard();
+    }),
+  );
+  document.querySelectorAll("[data-add-notebook]").forEach((el) =>
+    el.addEventListener("click", () => {
+      saveToNotebook(current(), { force: true });
+      state.feedback = "已加入生词本";
+      state.feedbackOk = true;
+      render();
+      setTimeout(() => {
+        state.feedback = "";
+        if (state.game === "flash") render();
+      }, 700);
+    }),
+  );
+  document.querySelectorAll("[data-remove-notebook]").forEach((el) =>
+    el.addEventListener("click", () => {
+      removeFromNotebook(el.getAttribute("data-remove-notebook"));
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-clear-notebook]").forEach((el) =>
+    el.addEventListener("click", () => {
+      if (!confirm("确定清空生词本吗？")) return;
+      saveNotebook([]);
+      render();
     }),
   );
   document.querySelectorAll("[data-quiz]").forEach((el) =>
@@ -1579,6 +1840,7 @@ function init() {
   state.stars = loadStars();
   state.wrongCount = loadWrongBook().length;
   state.progress = loadProgress();
+  refreshNotebookStats();
   render();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
