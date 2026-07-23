@@ -1,0 +1,18 @@
+{
+  "name": "快乐假期",
+  "short_name": "快乐假期",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#eef7f4",
+  "theme_color": "#0e6b6a",
+  "lang": "zh-CN",
+  "description": "初二英语 Unit 1 Happy Holiday 游戏化学习",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

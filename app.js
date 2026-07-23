@@ -1,0 +1,1084 @@
+const STAR_KEY = "hh-stars-v1";
+const WRONG_KEY = "hh-wrong-v1";
+const PROGRESS_KEY = "hh-progress-v1";
+const ROUND = 10;
+const MATCH_N = 6;
+
+const GAMES = [
+  { id: "flash", title: "单词闪卡", desc: "看英文记中文", cat: "单词" },
+  { id: "quiz", title: "中英互译", desc: "四选一快速练", cat: "单词" },
+  { id: "match", title: "配对消消乐", desc: "英文和中文配对", cat: "单词" },
+  { id: "spell", title: "拼写挑战", desc: "看中文拼出英文", cat: "单词" },
+  { id: "phrase", title: "短语闯关", desc: "短语与表达", cat: "表达" },
+  { id: "grammar", title: "不定代词", desc: "本单元语法重点", cat: "语法" },
+  { id: "cloze", title: "课文挖空", desc: "同一材料反复练", cat: "课文" },
+  { id: "order", title: "事件排序", desc: "按时间排行程", cat: "课文" },
+  { id: "build", title: "句子重组", desc: "把词排成正确句子", cat: "表达" },
+  { id: "read", title: "课文朗读", desc: "读课文、看笔记", cat: "课文" },
+  { id: "review", title: "错题本", desc: "专攻错过的题", cat: "复习" },
+];
+
+const state = {
+  view: "home",
+  game: null,
+  stars: 0,
+  wrongCount: 0,
+  progress: {},
+  round: [],
+  index: 0,
+  score: 0,
+  answered: false,
+  selected: null,
+  flashShow: false,
+  matchLeft: [],
+  matchRight: [],
+  matchSel: null,
+  matchDone: new Set(),
+  spellInput: "",
+  buildPicked: [],
+  buildPool: [],
+  orderPicked: [],
+  orderPool: [],
+  clozeAnswers: [],
+  clozeTextId: null,
+  readTextId: null,
+  feedback: "",
+  feedbackOk: null,
+};
+
+function loadStars() {
+  return Number(localStorage.getItem(STAR_KEY) || 0) || 0;
+}
+function saveStars(n) {
+  localStorage.setItem(STAR_KEY, String(n));
+}
+
+function loadWrongBook() {
+  try {
+    const list = JSON.parse(localStorage.getItem(WRONG_KEY) || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function saveWrongBook(list) {
+  localStorage.setItem(WRONG_KEY, JSON.stringify(list));
+}
+
+function loadProgress() {
+  try {
+    return JSON.parse(localStorage.getItem(PROGRESS_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+function saveProgress() {
+  localStorage.setItem(PROGRESS_KEY, JSON.stringify(state.progress));
+}
+
+function markPlayed(gameId) {
+  state.progress[gameId] = (state.progress[gameId] || 0) + 1;
+  saveProgress();
+}
+
+function allVocab() {
+  return window.UNIT.vocab;
+}
+function allPhrases() {
+  return window.UNIT.phrases;
+}
+function allWordLike() {
+  return [
+    ...window.UNIT.vocab.map((x) => ({ ...x, kind: "word" })),
+    ...window.UNIT.phrases.map((x) => ({ ...x, kind: "phrase", pos: "phr.", ipa: "" })),
+  ];
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+function pick(arr, n) {
+  return shuffle(arr).slice(0, Math.min(n, arr.length));
+}
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+function norm(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/\s+/g, " ");
+}
+
+function speak(text) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-US";
+  u.rate = 0.92;
+  window.speechSynthesis.speak(u);
+}
+
+function itemKey(item) {
+  return `${item.kind || "word"}:${item.en}`;
+}
+
+function addWrong(item, meta = {}) {
+  if (!item || !item.en) return;
+  const key = meta.key || itemKey(item);
+  const list = loadWrongBook();
+  const i = list.findIndex((x) => x.key === key);
+  const row = {
+    key,
+    en: item.en,
+    zh: item.zh,
+    kind: item.kind || meta.kind || "word",
+    prompt: meta.prompt || "",
+    answer: meta.answer || item.en,
+    wrongCount: 1,
+    lastAt: Date.now(),
+  };
+  if (i >= 0) {
+    list[i].wrongCount = (list[i].wrongCount || 1) + 1;
+    list[i].lastAt = Date.now();
+  } else {
+    list.unshift(row);
+  }
+  saveWrongBook(list);
+  state.wrongCount = list.length;
+}
+
+function markCorrect(item, key) {
+  const k = key || (item ? itemKey(item) : null);
+  if (!k) return;
+  let list = loadWrongBook();
+  const i = list.findIndex((x) => x.key === k);
+  if (i < 0) return;
+  if (state.game === "review") {
+    list.splice(i, 1);
+  } else {
+    list[i].wrongCount = Math.max(0, (list[i].wrongCount || 1) - 1);
+    if (list[i].wrongCount <= 0) list.splice(i, 1);
+  }
+  saveWrongBook(list);
+  state.wrongCount = list.length;
+}
+
+function earnStars(n) {
+  state.stars += n;
+  saveStars(state.stars);
+}
+
+function goHome() {
+  state.view = "home";
+  state.game = null;
+  state.feedback = "";
+  render();
+}
+
+function startGame(gameId) {
+  if (gameId === "review" && loadWrongBook().length === 0) {
+    alert("错题本是空的，先去其他游戏练习吧！");
+    return;
+  }
+  state.view = "game";
+  state.game = gameId;
+  state.index = 0;
+  state.score = 0;
+  state.answered = false;
+  state.selected = null;
+  state.feedback = "";
+  state.feedbackOk = null;
+  state.flashShow = false;
+  state.spellInput = "";
+  state.buildPicked = [];
+  state.orderPicked = [];
+  state.clozeAnswers = [];
+  markPlayed(gameId);
+
+  if (gameId === "flash" || gameId === "quiz" || gameId === "spell") {
+    state.round = pick(allVocab(), ROUND);
+    if (gameId === "quiz") prepareQuizCard(state.round[0]);
+  } else if (gameId === "phrase") {
+    state.round = pick(allPhrases(), Math.min(ROUND, allPhrases().length));
+    preparePhraseCard(state.round[0]);
+  } else if (gameId === "match") {
+    setupMatch(pick(allVocab(), MATCH_N));
+  } else if (gameId === "grammar") {
+    state.round = pick(window.UNIT.grammar.blanks, ROUND);
+  } else if (gameId === "cloze") {
+    const texts = window.UNIT.texts.filter((t) => t.cloze);
+    state.clozeTextId = texts[0].id;
+    state.round = texts;
+  } else if (gameId === "order") {
+    state.round = shuffle(window.UNIT.sequences);
+    setupOrder(state.round[0]);
+  } else if (gameId === "build") {
+    state.round = pick(window.UNIT.sentenceBank, Math.min(ROUND, window.UNIT.sentenceBank.length));
+    setupBuild(state.round[0]);
+  } else if (gameId === "read") {
+    state.readTextId = window.UNIT.texts[0].id;
+  } else if (gameId === "review") {
+    const wrong = loadWrongBook().slice(0, ROUND);
+    state.round = wrong.map((w) => ({
+      en: w.en,
+      zh: w.zh,
+      kind: w.kind,
+      prompt: w.prompt,
+      answer: w.answer,
+      reviewKey: w.key,
+    }));
+    prepareQuizCard(state.round[0]);
+  }
+  render();
+}
+
+function setupMatch(items) {
+  state.round = items;
+  state.matchLeft = shuffle(items.map((x) => ({ id: x.en, label: x.en, side: "en" })));
+  state.matchRight = shuffle(items.map((x) => ({ id: x.en, label: x.zh, side: "zh" })));
+  state.matchSel = null;
+  state.matchDone = new Set();
+  state.score = 0;
+}
+
+function setupBuild(item) {
+  state.buildPicked = [];
+  state.buildPool = shuffle(item.words.map((w, i) => ({ id: `${i}-${w}`, w })));
+  state.answered = false;
+  state.feedback = "";
+}
+
+function setupOrder(seq) {
+  state.orderPicked = [];
+  state.orderPool = shuffle(seq.items.map((x) => ({ ...x })));
+  state.answered = false;
+  state.feedback = "";
+}
+
+function current() {
+  return state.round[state.index];
+}
+
+function prepareQuizCard(item) {
+  if (!item) return;
+  if (item.answer && (item.prompt || item.zh)) {
+    state.quizPrompt = item.prompt || item.en;
+    state.quizCorrect = item.answer;
+    state.quizHint = item.zh || "选出正确英文";
+    const pool = [
+      ...allVocab().map((x) => x.en),
+      ...allPhrases().map((x) => x.en),
+      ...(window.UNIT.grammar.blanks || []).map((x) => x.answer),
+    ];
+    state.quizOptions = shuffle([
+      item.answer,
+      ...pick(pool.filter((x) => norm(x) !== norm(item.answer)), 3),
+    ]);
+    return;
+  }
+  const enToZh = Math.random() < 0.5;
+  if (enToZh) {
+    state.quizPrompt = item.en;
+    state.quizCorrect = item.zh;
+    state.quizHint = "这个英文是什么意思？";
+    state.quizOptions = shuffle([
+      item.zh,
+      ...pick(allVocab().map((x) => x.zh).filter((x) => x !== item.zh), 3),
+    ]);
+  } else {
+    state.quizPrompt = item.zh;
+    state.quizCorrect = item.en;
+    state.quizHint = "这个中文对应哪个英文？";
+    state.quizOptions = shuffle([
+      item.en,
+      ...pick(allVocab().map((x) => x.en).filter((x) => x !== item.en), 3),
+    ]);
+  }
+}
+
+function preparePhraseCard(item) {
+  state.quizPrompt = item.en;
+  state.quizCorrect = item.zh;
+  state.quizHint = "这个短语是什么意思？";
+  state.quizOptions = shuffle([
+    item.zh,
+    ...pick(allPhrases().map((x) => x.zh).filter((x) => x !== item.zh), 3),
+  ]);
+}
+
+function nextCard() {
+  state.index += 1;
+  state.answered = false;
+  state.selected = null;
+  state.feedback = "";
+  state.feedbackOk = null;
+  state.flashShow = false;
+  state.spellInput = "";
+  if (state.index >= state.round.length) {
+    finishRound();
+    return;
+  }
+  if (state.game === "build") setupBuild(current());
+  if (state.game === "order") setupOrder(current());
+  if (state.game === "quiz" || state.game === "review") prepareQuizCard(current());
+  if (state.game === "phrase") preparePhraseCard(current());
+  render();
+}
+
+function finishRound() {
+  const bonus = Math.max(1, Math.round(state.score / 2));
+  earnStars(bonus);
+  state.view = "result";
+  render();
+}
+
+function answerQuiz(choice, correct) {
+  if (state.answered) return;
+  state.answered = true;
+  state.selected = choice;
+  const ok = choice === correct;
+  state.feedbackOk = ok;
+  const item = current();
+  if (ok) {
+    state.score += 1;
+    state.feedback = "答对了！";
+    markCorrect(item, item.reviewKey);
+  } else {
+    state.feedback = `正确答案：${correct}`;
+    addWrong(item, { answer: correct, prompt: item.zh || item.prompt });
+  }
+  render();
+}
+
+function onMatchTap(card) {
+  if (state.matchDone.has(card.id + ":" + card.side)) return;
+  if (!state.matchSel) {
+    state.matchSel = card;
+    render();
+    return;
+  }
+  if (state.matchSel.side === card.side) {
+    state.matchSel = card;
+    render();
+    return;
+  }
+  const a = state.matchSel;
+  const b = card;
+  const same = a.id === b.id;
+  if (same) {
+    state.matchDone.add(a.id + ":en");
+    state.matchDone.add(a.id + ":zh");
+    state.score += 1;
+    state.matchSel = null;
+    if (state.matchDone.size >= state.round.length * 2) {
+      setTimeout(finishRound, 350);
+    }
+  } else {
+    const item = state.round.find((x) => x.en === a.id) || { en: a.id, zh: "" };
+    addWrong(item);
+    state.feedback = "再试一次";
+    state.matchSel = null;
+    setTimeout(() => {
+      state.feedback = "";
+      render();
+    }, 500);
+  }
+  render();
+}
+
+function checkSpell() {
+  if (state.answered) return;
+  const item = current();
+  const ok = norm(state.spellInput) === norm(item.en);
+  state.answered = true;
+  state.feedbackOk = ok;
+  if (ok) {
+    state.score += 1;
+    state.feedback = "拼写正确！";
+    markCorrect(item);
+  } else {
+    state.feedback = `正确拼写：${item.en}`;
+    addWrong(item);
+  }
+  render();
+}
+
+function checkGrammar(choice) {
+  const item = current();
+  answerQuiz(choice, item.answer);
+}
+
+function checkBuild() {
+  if (state.answered) return;
+  const item = current();
+  const got = state.buildPicked.map((x) => x.w).join(" ");
+  const ok = norm(got) === norm(item.words.join(" "));
+  state.answered = true;
+  state.feedbackOk = ok;
+  if (ok) {
+    state.score += 1;
+    state.feedback = "句子正确！";
+  } else {
+    state.feedback = `正确句子：${item.en}`;
+    addWrong({ en: item.en, zh: item.zh, kind: "sentence" }, { key: `sentence:${item.id}`, answer: item.en });
+  }
+  render();
+}
+
+function checkOrder() {
+  if (state.answered) return;
+  const seq = current();
+  const got = state.orderPicked.map((x) => x.id);
+  const ok = got.join(",") === seq.order.join(",");
+  state.answered = true;
+  state.feedbackOk = ok;
+  if (ok) {
+    state.score += 1;
+    state.feedback = "顺序正确！";
+  } else {
+    const right = seq.order
+      .map((id, i) => `${i + 1}. ${seq.items.find((x) => x.id === id).text}`)
+      .join("\n");
+    state.feedback = "正确顺序：\n" + right;
+    addWrong({ en: seq.title, zh: "事件排序", kind: "order" }, { key: `order:${seq.id}` });
+  }
+  render();
+}
+
+function checkCloze() {
+  if (state.answered) return;
+  const text = window.UNIT.texts.find((t) => t.id === state.clozeTextId);
+  let okCount = 0;
+  text.blanks.forEach((b, i) => {
+    const got = norm(state.clozeAnswers[i] || "");
+    const ans = norm(b.answer);
+    if (got === ans) okCount += 1;
+    else addWrong({ en: b.answer, zh: b.hint || text.title, kind: "cloze" }, { key: `cloze:${text.id}:${i}` });
+  });
+  state.answered = true;
+  state.feedbackOk = okCount === text.blanks.length;
+  state.score += okCount;
+  state.feedback =
+    okCount === text.blanks.length
+      ? "全部填对了！"
+      : `对了 ${okCount}/${text.blanks.length} 空。可对照课文再练。`;
+  render();
+}
+
+function clearWrongBook() {
+  if (!confirm("确定清空全部错题吗？")) return;
+  saveWrongBook([]);
+  state.wrongCount = 0;
+  goHome();
+}
+
+function $(sel) {
+  return document.querySelector(sel);
+}
+
+function renderHome() {
+  const u = window.UNIT;
+  const cats = ["单词", "表达", "语法", "课文", "复习"];
+  const played = Object.keys(state.progress).length;
+  return `
+    <header class="hero">
+      <p class="eyebrow">${esc(u.title)} · 初二英语</p>
+      <h1>${esc(u.theme)}</h1>
+      <p class="tagline">${esc(u.themeZh)} · 同一批材料，多种游戏练透</p>
+      <div class="hero-meta">
+        <span class="stat">★ ${state.stars}</span>
+        <span class="stat">已练 ${played} 种游戏</span>
+        <span class="stat">错题 ${state.wrongCount}</span>
+      </div>
+    </header>
+
+    <section class="card soft">
+      <h2>本单元目标</h2>
+      <p class="muted">大问题：${esc(u.bigQuestionZh)}</p>
+      <ul class="goal-list">
+        ${u.goals.map((g) => `<li>${esc(g.zh)}</li>`).join("")}
+      </ul>
+    </section>
+
+    ${cats
+      .map((cat) => {
+        const games = GAMES.filter((g) => g.cat === cat);
+        if (!games.length) return "";
+        return `
+          <section class="block">
+            <h2 class="section-title">${esc(cat)}</h2>
+            <div class="games">
+              ${games
+                .map(
+                  (g) => `
+                <button class="game-btn" data-start="${g.id}">
+                  <strong>${esc(g.title)}</strong>
+                  <span>${esc(g.desc)}</span>
+                  ${state.progress[g.id] ? `<em>练过 ${state.progress[g.id]} 次</em>` : ""}
+                </button>`,
+                )
+                .join("")}
+            </div>
+          </section>`;
+      })
+      .join("")}
+
+    <section class="card soft">
+      <h2>教材进度</h2>
+      <p class="muted">单词 ${u.vocab.length} · 短语 ${u.phrases.length} · 专有名词 ${u.properNouns.length} · 课文 ${u.texts.length}</p>
+      <p class="muted">你说一个单元一个单元补，Unit 1 已就绪。之后发 Unit 2 图片即可继续加。</p>
+    </section>
+  `;
+}
+
+function toolbar(title) {
+  return `
+    <div class="toolbar">
+      <button class="back" data-home>← 返回</button>
+      <span class="chip">${esc(title)}</span>
+      <span class="chip">得分 ${state.score}</span>
+    </div>
+  `;
+}
+
+function feedbackBlock() {
+  if (!state.feedback) return "";
+  const cls = state.feedbackOk === true ? "ok" : state.feedbackOk === false ? "bad" : "";
+  return `<div class="tip ${cls}">${esc(state.feedback).replace(/\n/g, "<br>")}</div>`;
+}
+
+function nextBtn(label = "下一题") {
+  if (!state.answered) return "";
+  return `<button class="primary" data-next>${esc(label)}</button>`;
+}
+
+function renderFlash() {
+  const item = current();
+  return `
+    ${toolbar(`闪卡 ${state.index + 1}/${state.round.length}`)}
+    <div class="card center">
+      <p class="pos">${esc(item.pos || "")} ${item.ipa ? esc(item.ipa) : ""}</p>
+      <p class="big-en">${esc(item.en)}</p>
+      <button class="ghost" data-speak="${esc(item.en)}">听发音</button>
+      ${
+        state.flashShow
+          ? `<p class="zh-line">${esc(item.zh)}</p>${item.tip ? `<p class="muted">${esc(item.tip)}</p>` : ""}`
+          : `<button class="primary" data-reveal>显示中文</button>`
+      }
+    </div>
+    <div class="row">
+      <button class="choice" data-flash-ok>记得</button>
+      <button class="choice" data-flash-bad>再练</button>
+    </div>
+  `;
+}
+
+function renderQuiz() {
+  const item = current();
+  const prompt = state.quizPrompt;
+  const correct = state.quizCorrect;
+  const options = state.quizOptions || [];
+  return `
+    ${toolbar(`互译 ${state.index + 1}/${state.round.length}`)}
+    <div class="card center">
+      <p class="muted">${esc(state.quizHint || "请选择正确答案")}</p>
+      <p class="big-en">${esc(prompt)}</p>
+      ${item.en && !item.answer ? `<button class="ghost" data-speak="${esc(item.en)}">听发音</button>` : ""}
+    </div>
+    <div class="choices">
+      ${options
+        .map((o) => {
+          let cls = "choice";
+          if (state.answered) {
+            if (o === correct) cls += " ok";
+            else if (o === state.selected) cls += " bad";
+          } else if (o === state.selected) cls += " on";
+          return `<button class="${cls}" data-quiz="${esc(o)}">${esc(o)}</button>`;
+        })
+        .join("")}
+    </div>
+    ${feedbackBlock()}
+    ${nextBtn()}
+  `;
+}
+
+function renderMatch() {
+  const left = state.matchLeft;
+  const right = state.matchRight;
+  return `
+    ${toolbar(`配对 ${state.matchDone.size / 2}/${state.round.length}`)}
+    <p class="muted">先点左边英文，再点右边中文。</p>
+    <div class="match-grid">
+      <div class="match-col">
+        ${left
+          .map((c) => {
+            const done = state.matchDone.has(c.id + ":en");
+            const sel = state.matchSel && state.matchSel.id === c.id && state.matchSel.side === "en";
+            return `<button class="match-card ${done ? "done" : ""} ${sel ? "sel" : ""}" data-match='${esc(JSON.stringify(c))}'>${esc(c.label)}</button>`;
+          })
+          .join("")}
+      </div>
+      <div class="match-col">
+        ${right
+          .map((c) => {
+            const done = state.matchDone.has(c.id + ":zh");
+            const sel = state.matchSel && state.matchSel.id === c.id && state.matchSel.side === "zh";
+            return `<button class="match-card ${done ? "done" : ""} ${sel ? "sel" : ""}" data-match='${esc(JSON.stringify(c))}'>${esc(c.label)}</button>`;
+          })
+          .join("")}
+      </div>
+    </div>
+    ${feedbackBlock()}
+  `;
+}
+
+function renderSpell() {
+  const item = current();
+  return `
+    ${toolbar(`拼写 ${state.index + 1}/${state.round.length}`)}
+    <div class="card center">
+      <p class="muted">根据中文拼出英文单词</p>
+      <p class="zh-line">${esc(item.zh)}</p>
+      ${item.tip ? `<p class="muted">${esc(item.tip)}</p>` : ""}
+      <input class="spell" id="spellInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value="${esc(state.spellInput)}" ${state.answered ? "disabled" : ""} placeholder="输入英文" />
+      ${!state.answered ? `<button class="primary" data-check-spell>检查</button>` : ""}
+      ${state.answered ? `<button class="ghost" data-speak="${esc(item.en)}">听发音</button>` : ""}
+    </div>
+    ${feedbackBlock()}
+    ${nextBtn()}
+  `;
+}
+
+function renderPhrase() {
+  const item = current();
+  const correct = state.quizCorrect;
+  const options = state.quizOptions || [];
+  return `
+    ${toolbar(`短语 ${state.index + 1}/${state.round.length}`)}
+    <div class="card center">
+      <p class="muted">${esc(state.quizHint || "这个短语是什么意思？")}</p>
+      <p class="big-en">${esc(item.en)}</p>
+      <button class="ghost" data-speak="${esc(item.en)}">听发音</button>
+    </div>
+    <div class="choices">
+      ${options
+        .map((o) => {
+          let cls = "choice";
+          if (state.answered) {
+            if (o === correct) cls += " ok";
+            else if (o === state.selected) cls += " bad";
+          }
+          return `<button class="${cls}" data-quiz="${esc(o)}">${esc(o)}</button>`;
+        })
+        .join("")}
+    </div>
+    ${feedbackBlock()}
+    ${nextBtn()}
+  `;
+}
+
+function renderGrammar() {
+  const item = current();
+  const g = window.UNIT.grammar;
+  return `
+    ${toolbar(`语法 ${state.index + 1}/${state.round.length}`)}
+    <div class="card soft">
+      <h2>${esc(g.title)} · ${esc(g.titleEn)}</h2>
+      <p class="muted">${esc(g.tip)}</p>
+    </div>
+    <div class="card">
+      <p class="muted">${esc(item.zh || "")}</p>
+      <p class="big-en prompt-line">${esc(item.prompt)}</p>
+    </div>
+    <div class="choices">
+      ${item.options
+        .map((o) => {
+          let cls = "choice";
+          if (state.answered) {
+            if (o === item.answer) cls += " ok";
+            else if (o === state.selected) cls += " bad";
+          }
+          return `<button class="${cls}" data-grammar="${esc(o)}">${esc(o)}</button>`;
+        })
+        .join("")}
+    </div>
+    ${feedbackBlock()}
+    ${nextBtn()}
+  `;
+}
+
+function renderCloze() {
+  const texts = state.round;
+  const text = texts.find((t) => t.id === state.clozeTextId) || texts[0];
+  const parts = text.cloze.split("____");
+  let html = "";
+  parts.forEach((part, i) => {
+    html += esc(part);
+    if (i < text.blanks.length) {
+      const val = state.clozeAnswers[i] || "";
+      const b = text.blanks[i];
+      let cls = "cloze-input";
+      if (state.answered) {
+        cls += norm(val) === norm(b.answer) ? " ok" : " bad";
+      }
+      html += `<input class="${cls}" data-cloze="${i}" value="${esc(val)}" ${state.answered ? "disabled" : ""} placeholder="${esc(b.hint || "")}" />`;
+    }
+  });
+  return `
+    ${toolbar("课文挖空")}
+    <div class="tabs">
+      ${texts
+        .map(
+          (t) =>
+            `<button class="tab ${t.id === text.id ? "on" : ""}" data-cloze-text="${t.id}" ${state.answered ? "disabled" : ""}>${esc(t.title)}</button>`,
+        )
+        .join("")}
+    </div>
+    <div class="card">
+      <h2>${esc(text.title)}</h2>
+      <p class="cloze-body">${html}</p>
+    </div>
+    ${!state.answered ? `<button class="primary" data-check-cloze>检查填空</button>` : ""}
+    ${feedbackBlock()}
+    ${
+      state.answered
+        ? `<button class="primary" data-home>回首页</button>
+           <button class="ghost" data-retry-cloze>再练这篇</button>
+           <div class="card soft"><p class="muted">完整课文</p><p>${esc(text.body)}</p></div>`
+        : ""
+    }
+  `;
+}
+
+function renderOrder() {
+  const seq = current();
+  return `
+    ${toolbar(`排序 ${state.index + 1}/${state.round.length}`)}
+    <div class="card">
+      <h2>${esc(seq.title)}</h2>
+      <p class="muted">按时间顺序点选事件</p>
+      <div class="order-picked">
+        ${
+          state.orderPicked.length
+            ? state.orderPicked
+                .map(
+                  (x, i) =>
+                    `<div class="order-item"><span>${i + 1}</span><div><strong>${esc(x.text)}</strong><p>${esc(x.zh)}</p></div></div>`,
+                )
+                .join("")
+            : `<p class="muted">还没有选择</p>`
+        }
+      </div>
+    </div>
+    <div class="choices">
+      ${state.orderPool
+        .map(
+          (x) =>
+            `<button class="choice" data-order="${esc(x.id)}" ${state.answered ? "disabled" : ""}><strong>${esc(x.text)}</strong><span class="en">${esc(x.zh)}</span></button>`,
+        )
+        .join("")}
+    </div>
+    ${!state.answered && state.orderPicked.length ? `<button class="ghost" data-order-undo>撤销</button>` : ""}
+    ${!state.answered && state.orderPicked.length === seq.items.length ? `<button class="primary" data-check-order>检查顺序</button>` : ""}
+    ${feedbackBlock()}
+    ${nextBtn(state.index + 1 >= state.round.length ? "完成" : "下一组")}
+  `;
+}
+
+function renderBuild() {
+  const item = current();
+  return `
+    ${toolbar(`组句 ${state.index + 1}/${state.round.length}`)}
+    <div class="card">
+      <p class="muted">中文提示</p>
+      <p class="zh-line">${esc(item.zh)}</p>
+      <div class="build-line">
+        ${
+          state.buildPicked.length
+            ? state.buildPicked.map((x) => `<button class="word-chip on" data-unbuild="${esc(x.id)}" ${state.answered ? "disabled" : ""}>${esc(x.w)}</button>`).join("")
+            : `<span class="muted">点下面的词组成句子</span>`
+        }
+      </div>
+    </div>
+    <div class="word-pool">
+      ${state.buildPool
+        .map((x) => `<button class="word-chip" data-build="${esc(x.id)}" ${state.answered ? "disabled" : ""}>${esc(x.w)}</button>`)
+        .join("")}
+    </div>
+    ${!state.answered && state.buildPicked.length ? `<button class="primary" data-check-build>检查句子</button>` : ""}
+    ${feedbackBlock()}
+    ${nextBtn()}
+  `;
+}
+
+function renderRead() {
+  const texts = window.UNIT.texts;
+  const text = texts.find((t) => t.id === state.readTextId) || texts[0];
+  const dialogue = window.UNIT.dialogue;
+  return `
+    ${toolbar("课文朗读")}
+    <div class="tabs">
+      ${texts
+        .map((t) => `<button class="tab ${t.id === text.id ? "on" : ""}" data-read="${t.id}">${esc(t.title)}</button>`)
+        .join("")}
+      <button class="tab ${state.readTextId === "dialogue" ? "on" : ""}" data-read="dialogue">${esc(dialogue.title)}</button>
+    </div>
+    ${
+      state.readTextId === "dialogue"
+        ? `<div class="card">
+            <h2>${esc(dialogue.title)}</h2>
+            <button class="ghost" data-speak-all>朗读整段对话</button>
+            <div class="dialogue">
+              ${dialogue.lines
+                .map(
+                  (l) => `
+                <div class="line">
+                  <strong>${esc(l.who)}</strong>
+                  <p>${esc(l.text)}</p>
+                  <button class="mini" data-speak="${esc(l.text)}">听</button>
+                </div>`,
+                )
+                .join("")}
+            </div>
+          </div>`
+        : `<div class="card">
+            <h2>${esc(text.title)}</h2>
+            <p class="muted">${esc(text.titleEn || "")}</p>
+            <button class="ghost" data-speak="${esc(text.body)}">朗读课文</button>
+            <p class="read-body">${esc(text.body)}</p>
+          </div>`
+    }
+    <button class="primary" data-home>回首页</button>
+  `;
+}
+
+function renderReview() {
+  return renderQuiz();
+}
+
+function renderResult() {
+  const g = GAMES.find((x) => x.id === state.game);
+  return `
+    <div class="card center result">
+      <p class="eyebrow">本轮结束</p>
+      <h1>${esc(g ? g.title : "练习")}</h1>
+      <p class="zh-line">得分 ${state.score}</p>
+      <p class="muted">星星累计：★ ${state.stars}</p>
+      <div class="row">
+        <button class="primary" data-restart>再来一轮</button>
+        <button class="ghost" data-home>回首页</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderGame() {
+  switch (state.game) {
+    case "flash":
+      return renderFlash();
+    case "quiz":
+    case "review":
+      return renderQuiz();
+    case "match":
+      return renderMatch();
+    case "spell":
+      return renderSpell();
+    case "phrase":
+      return renderPhrase();
+    case "grammar":
+      return renderGrammar();
+    case "cloze":
+      return renderCloze();
+    case "order":
+      return renderOrder();
+    case "build":
+      return renderBuild();
+    case "read":
+      return renderRead();
+    default:
+      return renderHome();
+  }
+}
+
+function render() {
+  const app = $("#app");
+  if (!app) return;
+  if (state.view === "home") app.innerHTML = renderHome();
+  else if (state.view === "result") app.innerHTML = renderResult();
+  else app.innerHTML = renderGame();
+  bind();
+}
+
+function bind() {
+  document.querySelectorAll("[data-home]").forEach((el) => el.addEventListener("click", goHome));
+  document.querySelectorAll("[data-start]").forEach((el) =>
+    el.addEventListener("click", () => startGame(el.getAttribute("data-start"))),
+  );
+  document.querySelectorAll("[data-next]").forEach((el) => el.addEventListener("click", nextCard));
+  document.querySelectorAll("[data-restart]").forEach((el) =>
+    el.addEventListener("click", () => startGame(state.game)),
+  );
+  document.querySelectorAll("[data-speak]").forEach((el) =>
+    el.addEventListener("click", () => speak(el.getAttribute("data-speak"))),
+  );
+  document.querySelectorAll("[data-reveal]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.flashShow = true;
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-flash-ok]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.score += 1;
+      markCorrect(current());
+      nextCard();
+    }),
+  );
+  document.querySelectorAll("[data-flash-bad]").forEach((el) =>
+    el.addEventListener("click", () => {
+      addWrong(current());
+      nextCard();
+    }),
+  );
+  document.querySelectorAll("[data-quiz]").forEach((el) =>
+    el.addEventListener("click", () => {
+      if (state.answered) return;
+      answerQuiz(el.getAttribute("data-quiz"), state.quizCorrect);
+    }),
+  );
+  document.querySelectorAll("[data-grammar]").forEach((el) =>
+    el.addEventListener("click", () => checkGrammar(el.getAttribute("data-grammar"))),
+  );
+  document.querySelectorAll("[data-match]").forEach((el) =>
+    el.addEventListener("click", () => {
+      try {
+        onMatchTap(JSON.parse(el.getAttribute("data-match")));
+      } catch (_) {}
+    }),
+  );
+  document.querySelectorAll("[data-check-spell]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const input = $("#spellInput");
+      state.spellInput = input ? input.value : state.spellInput;
+      checkSpell();
+    }),
+  );
+  const spell = $("#spellInput");
+  if (spell) {
+    spell.addEventListener("input", (e) => {
+      state.spellInput = e.target.value;
+    });
+    spell.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        state.spellInput = spell.value;
+        checkSpell();
+      }
+    });
+    if (!state.answered) spell.focus();
+  }
+  document.querySelectorAll("[data-cloze-text]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.clozeTextId = el.getAttribute("data-cloze-text");
+      state.clozeAnswers = [];
+      state.answered = false;
+      state.feedback = "";
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-cloze]").forEach((el) =>
+    el.addEventListener("input", (e) => {
+      const i = Number(el.getAttribute("data-cloze"));
+      state.clozeAnswers[i] = e.target.value;
+    }),
+  );
+  document.querySelectorAll("[data-check-cloze]").forEach((el) =>
+    el.addEventListener("click", checkCloze),
+  );
+  document.querySelectorAll("[data-retry-cloze]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.answered = false;
+      state.feedback = "";
+      state.clozeAnswers = [];
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-order]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const id = el.getAttribute("data-order");
+      const seq = current();
+      const item = state.orderPool.find((x) => x.id === id);
+      if (!item) return;
+      state.orderPicked.push(item);
+      state.orderPool = state.orderPool.filter((x) => x.id !== id);
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-order-undo]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const last = state.orderPicked.pop();
+      if (last) state.orderPool.push(last);
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-check-order]").forEach((el) =>
+    el.addEventListener("click", checkOrder),
+  );
+  document.querySelectorAll("[data-build]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const id = el.getAttribute("data-build");
+      const w = state.buildPool.find((x) => x.id === id);
+      if (!w) return;
+      state.buildPicked.push(w);
+      state.buildPool = state.buildPool.filter((x) => x.id !== id);
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-unbuild]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const id = el.getAttribute("data-unbuild");
+      const w = state.buildPicked.find((x) => x.id === id);
+      if (!w) return;
+      state.buildPicked = state.buildPicked.filter((x) => x.id !== id);
+      state.buildPool.push(w);
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-check-build]").forEach((el) =>
+    el.addEventListener("click", checkBuild),
+  );
+  document.querySelectorAll("[data-read]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.readTextId = el.getAttribute("data-read");
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-speak-all]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const all = window.UNIT.dialogue.lines.map((l) => `${l.who}. ${l.text}`).join(" ");
+      speak(all);
+    }),
+  );
+}
+
+function init() {
+  state.stars = loadStars();
+  state.wrongCount = loadWrongBook().length;
+  state.progress = loadProgress();
+  render();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+}
+
+document.addEventListener("DOMContentLoaded", init);
