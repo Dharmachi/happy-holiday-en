@@ -7,22 +7,24 @@ const AUTO_NEXT_OK = 700;
 const AUTO_NEXT_BAD = 1200;
 
 const GAMES = [
+  { id: "shoot", title: "词块坠落", desc: "过关打词：词·短语·句子", cat: "闯关" },
   { id: "flash", title: "单词闪卡", desc: "点选后自动下一张", cat: "单词" },
   { id: "quiz", title: "中英互译", desc: "点选后自动下一题", cat: "单词" },
   { id: "context", title: "语境理解", desc: "在句子里理解单词", cat: "单词" },
   { id: "match", title: "配对消消乐", desc: "英文和中文配对", cat: "单词" },
   { id: "spell", title: "拼写挑战", desc: "只看中文来拼写", cat: "单词" },
   { id: "phrase", title: "短语闯关", desc: "短语与表达", cat: "表达" },
-  { id: "grammar", title: "不定代词", desc: "本单元语法重点", cat: "语法" },
+  { id: "build", title: "句子重组", desc: "把词排成正确句子", cat: "表达" },
+  { id: "grammar", title: "语法课堂", desc: "讲解 · 例句 · 练习", cat: "语法" },
   { id: "cloze", title: "课文挖空", desc: "同一材料反复练", cat: "课文" },
   { id: "order", title: "事件排序", desc: "按时间排行程", cat: "课文" },
-  { id: "build", title: "句子重组", desc: "把词排成正确句子", cat: "表达" },
   { id: "read", title: "课文朗读", desc: "读课文、看笔记", cat: "课文" },
   { id: "review", title: "错题本", desc: "专攻错过的题", cat: "复习" },
 ];
 
 let autoNextTimer = null;
 let speakAudio = null;
+let shootRaf = null;
 
 const state = {
   view: "home",
@@ -50,6 +52,9 @@ const state = {
   readTextId: null,
   feedback: "",
   feedbackOk: null,
+  grammarTab: "rules",
+  grammarTopicId: "indefinite",
+  shoot: null,
 };
 
 function loadStars() {
@@ -268,10 +273,12 @@ function earnStars(n) {
 
 function goHome() {
   clearTimeout(autoNextTimer);
+  stopShootLoop();
   stopSpeak();
   state.view = "home";
   state.game = null;
   state.feedback = "";
+  state.shoot = null;
   render();
 }
 
@@ -280,6 +287,24 @@ function scheduleAutoNext(ok) {
   autoNextTimer = setTimeout(() => {
     if (state.view === "game" && state.answered) nextCard();
   }, ok ? AUTO_NEXT_OK : AUTO_NEXT_BAD);
+}
+
+function allGrammarTopics() {
+  const main = {
+    id: "indefinite",
+    title: window.UNIT.grammar.title,
+    titleEn: window.UNIT.grammar.titleEn,
+    tip: window.UNIT.grammar.tip,
+    rules: window.UNIT.grammar.rules || [],
+    groups: window.UNIT.grammar.groups || [],
+    examples: window.UNIT.grammar.examples || [],
+    blanks: window.UNIT.grammar.blanks || [],
+  };
+  return [main, ...(window.UNIT.grammarExtra || [])];
+}
+
+function currentGrammarTopic() {
+  return allGrammarTopics().find((t) => t.id === state.grammarTopicId) || allGrammarTopics()[0];
 }
 
 function startGame(gameId) {
@@ -315,7 +340,12 @@ function startGame(gameId) {
   } else if (gameId === "match") {
     setupMatch(pick(allVocab(), MATCH_N));
   } else if (gameId === "grammar") {
-    state.round = pick(window.UNIT.grammar.blanks, Math.min(ROUND, window.UNIT.grammar.blanks.length));
+    state.grammarTab = "rules";
+    state.grammarTopicId = "indefinite";
+    state.round = [];
+  } else if (gameId === "shoot") {
+    startShootRun();
+    return;
   } else if (gameId === "cloze") {
     const texts = window.UNIT.texts.filter((t) => t.cloze);
     state.clozeTextId = texts[0].id;
@@ -340,6 +370,202 @@ function startGame(gameId) {
     }));
     prepareQuizCard(state.round[0]);
   }
+  render();
+}
+
+function buildShootQueue() {
+  const vocab = pick(allVocab(), 8).map((x) => ({
+    kind: "单词",
+    prompt: x.en,
+    answer: x.zh,
+    speak: x.en,
+    item: x,
+  }));
+  const phrases = pick(allPhrases(), 5).map((x) => ({
+    kind: "短语",
+    prompt: x.en,
+    answer: x.zh,
+    speak: x.en,
+    item: x,
+  }));
+  const sentences = pick(
+    allVocab().filter((x) => x.ex),
+    5,
+  ).map((x) => ({
+    kind: "句子",
+    prompt: x.ex,
+    answer: x.zh,
+    speak: x.ex,
+    item: x,
+    hint: "句子中高亮词的意思是？",
+    highlight: x.en,
+  }));
+  return shuffle([...vocab, ...phrases, ...sentences]);
+}
+
+function stopShootLoop() {
+  if (shootRaf) cancelAnimationFrame(shootRaf);
+  shootRaf = null;
+}
+
+function startShootRun() {
+  stopShootLoop();
+  state.game = "shoot";
+  state.view = "game";
+  state.score = 0;
+  state.shoot = {
+    lives: 3,
+    cleared: 0,
+    combo: 0,
+    queue: buildShootQueue(),
+    current: null,
+    y: 0,
+    speed: 38,
+    locked: false,
+    bang: false,
+  };
+  spawnShootTarget();
+  render();
+  shootRaf = requestAnimationFrame(shootTick);
+}
+
+function spawnShootTarget() {
+  const s = state.shoot;
+  if (!s || !s.queue.length) {
+    finishShoot(true);
+    return;
+  }
+  const next = s.queue.shift();
+  const options = shuffle([next.answer, ...pickDistractors(next.answer, "zh", 3)]);
+  s.current = { ...next, options };
+  s.y = 0;
+  s.locked = false;
+  s.bang = false;
+  s.speed = 34 + Math.floor(s.cleared / 3) * 8;
+}
+
+function finishShoot(won) {
+  stopShootLoop();
+  const s = state.shoot;
+  if (!s) return;
+  const bonus = won ? 5 + Math.floor(s.cleared / 2) : Math.max(1, Math.floor(s.cleared / 2));
+  earnStars(bonus);
+  state.score = s.cleared;
+  state.view = "result";
+  state.feedback = won ? "全部击落，过关成功！" : "生命用尽，再试一次！";
+  state.feedbackOk = won;
+  render();
+}
+
+function shootTick(ts) {
+  if (state.game !== "shoot" || !state.shoot || state.view !== "game") return;
+  const s = state.shoot;
+  if (!s.lastTs) s.lastTs = ts;
+  const dt = Math.min(0.05, (ts - s.lastTs) / 1000);
+  s.lastTs = ts;
+  if (!s.locked && s.current) {
+    s.y += s.speed * dt;
+    const block = document.getElementById("fallingBlock");
+    if (block) block.style.transform = `translate(-50%, ${s.y}px)`;
+    const arena = document.getElementById("shootArena");
+    const limit = arena ? arena.clientHeight - 88 : 320;
+    if (s.y >= limit) {
+      missShoot("太慢了，词块落地了！");
+      return;
+    }
+  }
+  shootRaf = requestAnimationFrame(shootTick);
+}
+
+function missShoot(msg) {
+  const s = state.shoot;
+  if (!s || s.locked) return;
+  s.locked = true;
+  s.combo = 0;
+  s.lives -= 1;
+  if (s.current) addWrong(s.current.item || { en: s.current.prompt, zh: s.current.answer });
+  state.feedback = msg || "没打中";
+  state.feedbackOk = false;
+  render();
+  setTimeout(() => {
+    if (!state.shoot || state.game !== "shoot") return;
+    if (state.shoot.lives <= 0) {
+      finishShoot(false);
+      return;
+    }
+    state.feedback = "";
+    spawnShootTarget();
+    render();
+    stopShootLoop();
+    state.shoot.lastTs = 0;
+    shootRaf = requestAnimationFrame(shootTick);
+  }, 900);
+}
+
+function answerShoot(choice) {
+  const s = state.shoot;
+  if (!s || !s.current || s.locked) return;
+  s.locked = true;
+  const ok = choice === s.current.answer;
+  state.feedbackOk = ok;
+  if (ok) {
+    s.bang = true;
+    s.cleared += 1;
+    s.combo += 1;
+    state.score = s.cleared;
+    state.feedback = s.combo > 1 ? `击中！连击 x${s.combo}` : "击中！";
+    markCorrect(s.current.item);
+    render();
+    setTimeout(() => {
+      if (!state.shoot || state.game !== "shoot") return;
+      state.feedback = "";
+      if (!state.shoot.queue.length) {
+        finishShoot(true);
+        return;
+      }
+      spawnShootTarget();
+      render();
+      stopShootLoop();
+      state.shoot.lastTs = 0;
+      shootRaf = requestAnimationFrame(shootTick);
+    }, 650);
+  } else {
+    s.combo = 0;
+    s.lives -= 1;
+    state.feedback = `打偏了！答案：${s.current.answer}`;
+    addWrong(s.current.item || { en: s.current.prompt, zh: s.current.answer });
+    render();
+    setTimeout(() => {
+      if (!state.shoot || state.game !== "shoot") return;
+      if (state.shoot.lives <= 0) {
+        finishShoot(false);
+        return;
+      }
+      state.feedback = "";
+      spawnShootTarget();
+      render();
+      stopShootLoop();
+      state.shoot.lastTs = 0;
+      shootRaf = requestAnimationFrame(shootTick);
+    }, 1000);
+  }
+}
+
+function startGrammarPractice() {
+  const topic = currentGrammarTopic();
+  const blanks = topic.blanks || [];
+  if (!blanks.length) {
+    alert("这个语法点还没有练习题。");
+    return;
+  }
+  state.grammarTab = "practice";
+  state.round = pick(blanks, Math.min(ROUND, blanks.length));
+  state.index = 0;
+  state.score = 0;
+  state.answered = false;
+  state.selected = null;
+  state.feedback = "";
+  state.feedbackOk = null;
   render();
 }
 
@@ -421,6 +647,15 @@ function nextCard() {
   state.flashShow = false;
   state.spellInput = "";
   if (state.index >= state.round.length) {
+    if (state.game === "grammar") {
+      earnStars(Math.max(1, Math.round(state.score / 2)));
+      state.grammarTab = "rules";
+      state.round = [];
+      state.feedback = `练习完成！答对 ${state.score} 题`;
+      state.feedbackOk = true;
+      render();
+      return;
+    }
     finishRound();
     return;
   }
@@ -588,7 +823,7 @@ function $(sel) {
 
 function renderHome() {
   const u = window.UNIT;
-  const cats = ["单词", "表达", "语法", "课文", "复习"];
+  const cats = ["闯关", "单词", "表达", "语法", "课文", "复习"];
   const played = Object.keys(state.progress).length;
   return `
     <header class="hero">
@@ -825,32 +1060,127 @@ function renderPhrase() {
   `;
 }
 
-function renderGrammar() {
-  const item = current();
-  const g = window.UNIT.grammar;
+function renderShoot() {
+  const s = state.shoot;
+  if (!s || !s.current) {
+    return `${toolbar("词块坠落")}<div class="card"><p class="muted">准备中…</p></div>`;
+  }
+  const cur = s.current;
+  const hearts = "♥".repeat(Math.max(0, s.lives)) + "♡".repeat(Math.max(0, 3 - s.lives));
   return `
-    ${toolbar(`语法 ${state.index + 1}/${state.round.length}`)}
-    <div class="card soft">
-      <h2>${esc(g.title)} · ${esc(g.titleEn)}</h2>
-      <p class="muted">${esc(g.tip)}</p>
+    ${toolbar("词块坠落过关")}
+    <div class="shoot-hud">
+      <span class="chip">生命 ${hearts}</span>
+      <span class="chip">击落 ${s.cleared}</span>
+      <span class="chip">连击 ${s.combo}</span>
+      <span class="chip">${esc(cur.kind)}</span>
     </div>
-    <div class="card">
-      <p class="muted">${esc(item.zh || "")}（点选后自动下一题）</p>
-      <p class="big-en prompt-line">${esc(item.prompt)}</p>
+    <p class="muted">${esc(cur.hint || "在词块落地前点出正确中文！")}</p>
+    <div class="shoot-arena" id="shootArena">
+      <div class="falling ${s.bang ? "bang" : ""}" id="fallingBlock" style="transform:translate(-50%, ${s.y}px)">
+        <span class="falling-kind">${esc(cur.kind)}</span>
+        <p>${cur.highlight ? highlightWord(cur.prompt, cur.highlight) : esc(cur.prompt)}</p>
+      </div>
+      <div class="ground-line"></div>
     </div>
-    <div class="choices">
-      ${item.options
-        .map((o) => {
-          let cls = "choice";
-          if (state.answered) {
-            if (o === item.answer) cls += " ok";
-            else if (o === state.selected) cls += " bad";
-          }
-          return `<button class="${cls}" data-grammar="${esc(o)}" ${state.answered ? "disabled" : ""}>${esc(o)}</button>`;
-        })
+    <div class="choices shoot-choices">
+      ${cur.options
+        .map(
+          (o) =>
+            `<button class="choice" data-shoot="${esc(o)}" ${s.locked ? "disabled" : ""}>${esc(o)}</button>`,
+        )
         .join("")}
     </div>
     ${feedbackBlock()}
+    <button class="ghost" data-speak="${esc(cur.speak)}">听发音</button>
+  `;
+}
+
+function renderGrammar() {
+  const topics = allGrammarTopics();
+  const topic = currentGrammarTopic();
+  if (state.grammarTab === "practice" && state.round.length) {
+    const item = current();
+    return `
+      ${toolbar(`${topic.title} · 练习 ${state.index + 1}/${state.round.length}`)}
+      <div class="card">
+        <p class="muted">${esc(item.zh || "")}（点选后自动下一题）</p>
+        <p class="big-en prompt-line">${esc(item.prompt)}</p>
+      </div>
+      <div class="choices">
+        ${item.options
+          .map((o) => {
+            let cls = "choice";
+            if (state.answered) {
+              if (o === item.answer) cls += " ok";
+              else if (o === state.selected) cls += " bad";
+            }
+            return `<button class="${cls}" data-grammar="${esc(o)}" ${state.answered ? "disabled" : ""}>${esc(o)}</button>`;
+          })
+          .join("")}
+      </div>
+      ${feedbackBlock()}
+      <button class="ghost" data-grammar-tab="rules">返回语法讲解</button>
+    `;
+  }
+
+  return `
+    ${toolbar("语法课堂")}
+    <div class="tabs">
+      ${topics
+        .map(
+          (t) =>
+            `<button class="tab ${t.id === topic.id ? "on" : ""}" data-grammar-topic="${t.id}">${esc(t.title)}</button>`,
+        )
+        .join("")}
+    </div>
+    <div class="tabs">
+      <button class="tab ${state.grammarTab === "rules" ? "on" : ""}" data-grammar-tab="rules">讲解</button>
+      <button class="tab ${state.grammarTab === "examples" ? "on" : ""}" data-grammar-tab="examples">例句</button>
+      <button class="tab ${state.grammarTab === "practice" ? "on" : ""}" data-grammar-practice>练习</button>
+    </div>
+    <div class="card soft">
+      <h2>${esc(topic.title)} · ${esc(topic.titleEn || "")}</h2>
+      <p class="muted">${esc(topic.tip || "")}</p>
+    </div>
+    ${
+      state.grammarTab === "examples"
+        ? `<div class="card">
+            ${(topic.examples || [])
+              .map(
+                (ex) => `
+              <div class="grammar-ex">
+                <p class="example">${esc(ex.en || ex.q || "")}</p>
+                <p class="zh-line" style="font-size:1rem">${esc(ex.zh || ex.a || "")}</p>
+                ${ex.note ? `<p class="muted">${esc(ex.note)}</p>` : ""}
+                ${ex.en ? `<button class="mini" data-speak="${esc(ex.en)}">听</button>` : ""}
+              </div>`,
+              )
+              .join("")}
+          </div>`
+        : `<div class="card">
+            ${(topic.rules || [])
+              .map(
+                (r) => `
+              <div class="grammar-rule">
+                <h2>${esc(r.title)}</h2>
+                <p>${esc(r.body)}</p>
+              </div>`,
+              )
+              .join("")}
+            ${
+              topic.groups
+                ? `<div class="group-grid">${topic.groups
+                    .map(
+                      (g) =>
+                        `<div class="group-card"><strong>${esc(g.kind)}</strong><p>${esc(g.items.join(" · "))}</p></div>`,
+                    )
+                    .join("")}</div>`
+                : ""
+            }
+          </div>`
+    }
+    <button class="primary" data-grammar-practice>开始语法练习</button>
   `;
 }
 
@@ -1009,6 +1339,7 @@ function renderResult() {
     <div class="card center result">
       <p class="eyebrow">本轮结束</p>
       <h1>${esc(g ? g.title : "练习")}</h1>
+      ${state.feedback ? `<p class="tip ${state.feedbackOk ? "ok" : "bad"}">${esc(state.feedback)}</p>` : ""}
       <p class="zh-line">得分 ${state.score}</p>
       <p class="muted">星星累计：★ ${state.stars}</p>
       <div class="row">
@@ -1021,6 +1352,8 @@ function renderResult() {
 
 function renderGame() {
   switch (state.game) {
+    case "shoot":
+      return renderShoot();
     case "flash":
       return renderFlash();
     case "quiz":
@@ -1062,6 +1395,30 @@ function bind() {
   document.querySelectorAll("[data-home]").forEach((el) => el.addEventListener("click", goHome));
   document.querySelectorAll("[data-start]").forEach((el) =>
     el.addEventListener("click", () => startGame(el.getAttribute("data-start"))),
+  );
+  document.querySelectorAll("[data-shoot]").forEach((el) =>
+    el.addEventListener("click", () => answerShoot(el.getAttribute("data-shoot"))),
+  );
+  document.querySelectorAll("[data-grammar-topic]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.grammarTopicId = el.getAttribute("data-grammar-topic");
+      state.grammarTab = "rules";
+      state.round = [];
+      state.answered = false;
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-grammar-tab]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.grammarTab = el.getAttribute("data-grammar-tab");
+      state.round = [];
+      state.answered = false;
+      state.feedback = "";
+      render();
+    }),
+  );
+  document.querySelectorAll("[data-grammar-practice]").forEach((el) =>
+    el.addEventListener("click", startGrammarPractice),
   );
   document.querySelectorAll("[data-next]").forEach((el) => el.addEventListener("click", nextCard));
   document.querySelectorAll("[data-restart]").forEach((el) =>

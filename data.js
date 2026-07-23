@@ -128,15 +128,56 @@ window.UNIT = {
     title: "不定代词",
     titleEn: "Indefinite Pronouns",
     tip: "some- 多用于肯定句；any- 多用于疑问句和否定句；no- 表示否定；every- 表示全部。",
+    rules: [
+      {
+        title: "怎么选？",
+        body: "不定代词用来指不确定的人、事物或地点。本单元重点：someone / anyone / no one / everyone；something / anything / nothing / everything；somewhere / anywhere / nowhere / everywhere。",
+      },
+      {
+        title: "some- / any- / no- / every-",
+        body: "some-：多用于肯定句（I saw someone）。any-：多用于疑问句和否定句（Did you go anywhere? / I didn't do anything）。no-：本身含否定（No one came. = 没有人来）。every-：表示全部（Everyone loved it.）。",
+      },
+      {
+        title: "常见搭配",
+        body: "疑问句：Did you do anything interesting? / Did you go anywhere special? 肯定回答可用 somewhere / something / someone。否定：nothing / nowhere / no one。",
+      },
+    ],
     groups: [
       { kind: "人", items: ["someone", "anyone", "no one", "everyone"] },
       { kind: "物", items: ["something", "anything", "nothing", "everything"] },
       { kind: "地点", items: ["somewhere", "anywhere", "nowhere", "everywhere"] },
     ],
     examples: [
-      { q: "Did you go anywhere interesting?", a: "Yes, I went to Yunnan. / No, nowhere special." },
-      { q: "Did you do anything interesting?", a: "No, nothing special. But I met someone interesting." },
-      { q: "Did you eat anything special?", a: "Yes! Everything tasted good. Everyone loved it." },
+      {
+        en: "Did you go anywhere interesting?",
+        zh: "你去了什么有趣的地方吗？",
+        note: "疑问句用 anywhere",
+      },
+      {
+        en: "No, nothing special. But I met someone interesting.",
+        zh: "没有，没什么特别的。但我遇见了有趣的人。",
+        note: "否定用 nothing；肯定句用 someone",
+      },
+      {
+        en: "Everything tasted good. Everyone loved it.",
+        zh: "每样东西都好吃。大家都喜欢。",
+        note: "every- 表示全部",
+      },
+      {
+        en: "No one could join me, so I went by myself.",
+        zh: "没人能和我一起，所以我自己去了。",
+        note: "no one = 没有人",
+      },
+      {
+        en: "I got you something as a gift.",
+        zh: "我给你带了点礼物。",
+        note: "肯定句用 something",
+      },
+      {
+        en: "I could do nothing but stay in the hotel.",
+        zh: "我只能待在旅馆里。",
+        note: "nothing but = 只有；只是",
+      },
     ],
     blanks: [
       {
@@ -225,6 +266,148 @@ window.UNIT = {
       },
     ],
   },
+
+  grammarExtra: [
+    {
+      id: "so-such",
+      title: "so...that / such...a",
+      titleEn: "Result Clauses",
+      tip: "so + 形容词 + that；such + a/an + 形容词 + 名词，都可以表示“如此……以至于……”。",
+      rules: [
+        {
+          title: "so...that",
+          body: "结构：so + adj./adv. + that + 从句。例：We were so happy that we didn't notice the time.（我们如此开心，以至于没注意到时间。）",
+        },
+        {
+          title: "such...that",
+          body: "结构：such + a/an + adj. + 单数可数名词 + that。例：It was such a good experience!（这真是一次美妙的经历！）",
+        },
+        {
+          title: "和 too...to 对比",
+          body: "too + adj. + to do = 太……而不能……。本单元日记里也有类似结果表达，先掌握 so/such 即可。",
+        },
+      ],
+      examples: [
+        {
+          en: "We were so happy that we didn't notice the time.",
+          zh: "我们如此开心，以至于没注意到时间。",
+          note: "so + happy + that",
+        },
+        {
+          en: "It was such a good experience!",
+          zh: "这真是一次美妙的经历！",
+          note: "such + a + good + experience",
+        },
+        {
+          en: "The scenery was so beautiful that it took my breath away.",
+          zh: "风景如此美丽，以至于让我惊叹。",
+          note: "so + beautiful + that",
+        },
+      ],
+      blanks: [
+        {
+          id: "ss1",
+          prompt: "We were ______ happy ______ we didn't notice the time.",
+          answer: "so / that",
+          options: ["so / that", "such / that", "too / to", "so / to"],
+          zh: "我们如此开心，以至于没注意到时间。",
+        },
+        {
+          id: "ss2",
+          prompt: "It was ______ a good experience!",
+          answer: "such",
+          options: ["so", "such", "too", "very"],
+          zh: "这真是一次美妙的经历！",
+        },
+        {
+          id: "ss3",
+          prompt: "The mountain scenery was ______ beautiful ______ it took my breath away.",
+          answer: "so / that",
+          options: ["so / that", "such / that", "too / that", "so / so"],
+          zh: "山景如此美丽，让我惊叹。",
+        },
+        {
+          id: "ss4",
+          prompt: "It was ______ wonderful holiday that I will never forget it.",
+          answer: "such a",
+          options: ["so", "such", "such a", "too a"],
+          zh: "那是一次如此美妙的假期，我永远不会忘记。",
+        },
+      ],
+    },
+    {
+      id: "past",
+      title: "一般过去时",
+      titleEn: "Simple Past",
+      tip: "谈论过去的假期经历时，常用一般过去时：went / stayed / visited / took / ate / enjoyed。",
+      rules: [
+        {
+          title: "什么时候用？",
+          body: "表示过去某个时间发生的动作或存在的状态。假期日记、旅行经历几乎都会用到。",
+        },
+        {
+          title: "怎么构成？",
+          body: "规则动词：词尾加 -ed（enjoy → enjoyed）。不规则动词要记：go→went, take→took, eat→ate, see→saw, feel→felt。",
+        },
+        {
+          title: "疑问与否定",
+          body: "疑问：Did you go anywhere interesting? 否定：I didn't do anything special. 注意：did 后面用动词原形。",
+        },
+      ],
+      examples: [
+        {
+          en: "Peter went to Yunnan with his family.",
+          zh: "彼得和家人去了云南。",
+          note: "go → went",
+        },
+        {
+          en: "They stayed in the old town and enjoyed it very much.",
+          zh: "他们住在古镇，非常享受。",
+          note: "stay/enjoy 规则变化",
+        },
+        {
+          en: "Did she do anything interesting?",
+          zh: "她做了什么有趣的事吗？",
+          note: "Did + 主语 + 动词原形",
+        },
+        {
+          en: "Adam didn't do anything special.",
+          zh: "亚当没做什么特别的事。",
+          note: "didn't + 动词原形",
+        },
+      ],
+      blanks: [
+        {
+          id: "p1",
+          prompt: "Yaming ______ to Mount Huangshan with his family.",
+          answer: "went",
+          options: ["go", "goes", "went", "going"],
+          zh: "亚明和家人去了黄山。",
+        },
+        {
+          id: "p2",
+          prompt: "______ you go anywhere interesting?",
+          answer: "Did",
+          options: ["Do", "Does", "Did", "Are"],
+          zh: "你去了什么有趣的地方吗？",
+        },
+        {
+          id: "p3",
+          prompt: "Adam ______ do anything special.",
+          answer: "didn't",
+          options: ["don't", "doesn't", "didn't", "wasn't"],
+          zh: "亚当没做什么特别的事。",
+        },
+        {
+          id: "p4",
+          prompt: "They ______ Yulong Mountain and ______ a lot of photos.",
+          answer: "visited / took",
+          options: ["visit / take", "visited / took", "visited / taken", "visiting / took"],
+          zh: "他们参观了玉龙雪山，拍了很多照片。",
+        },
+      ],
+    },
+  ],
 
   texts: [
     {
