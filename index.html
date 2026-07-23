@@ -452,12 +452,13 @@
 .pk-opt { min-height: 56px; }
 .pk-opt.side-a:active { background: #ffe0d6; }
 .pk-opt.side-b:active { background: #d9eef8; }
-.pk-final {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 10px;
-  align-items: center;
+.room-code {
+  font-family: var(--display);
+  font-size: 2.8rem;
+  letter-spacing: 0.18em;
   margin: 12px 0;
+  color: var(--sea);
+  font-weight: 700;
 }
 .gun-mission { text-align: center; }
 .gun-range {
@@ -789,6 +790,7 @@
 </head>
 <body>
   <div class="app" id="app"></div>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="./data.js"></script>
   <script src="./app.js"></script>
 </body>

@@ -12,7 +12,7 @@ const AUTO_NEXT_BAD = 1200;
 const SRS_DAYS = [1, 2, 4, 7, 15, 30];
 
 const GAMES = [
-  { id: "pk", title: "双人 PK", desc: "同屏抢答，比比谁更快", cat: "对战" },
+  { id: "pk", title: "双人 PK", desc: "同屏或两台手机联网对战", cat: "对战" },
   { id: "gun", title: "开枪打靶", desc: "点靶子开枪打正确单词", cat: "闯关" },
   { id: "shoot", title: "词块坠落", desc: "落地前选对中文", cat: "闯关" },
   { id: "flash", title: "单词闪卡", desc: "点选后自动下一张", cat: "单词" },
@@ -38,6 +38,8 @@ let autoNextTimer = null;
 let speakAudio = null;
 let shootRaf = null;
 let gunRaf = null;
+let pkPeer = null;
+let pkConn = null;
 
 const state = {
   view: "home",
@@ -615,6 +617,7 @@ function goHome() {
   clearTimeout(autoNextTimer);
   stopShootLoop();
   stopGunLoop();
+  destroyPkNet();
   stopSpeak();
   state.view = "home";
   state.game = null;
@@ -1287,26 +1290,86 @@ function buildPkQueue() {
   return shuffle([...words, ...phrases, ...sentences]).slice(0, PK_ROUNDS);
 }
 
+function serializePkQueue(queue) {
+  return queue.map((q) => ({
+    type: q.type,
+    prompt: q.prompt,
+    answer: q.answer,
+    speak: q.speak,
+    hint: q.hint || "",
+    highlight: q.highlight || "",
+    en: (q.item && q.item.en) || q.en || "",
+    zh: (q.item && q.item.zh) || q.zh || "",
+    options: q.options || shuffle([q.answer, ...pickDistractors(q.answer, "zh", 3)]),
+  }));
+}
+
+function hydratePkQueue(raw) {
+  return (raw || []).map((q) => ({
+    ...q,
+    item: { en: q.en, zh: q.zh, kind: q.type === "phrase" ? "phrase" : "word" },
+  }));
+}
+
+function destroyPkNet() {
+  try {
+    if (pkConn) pkConn.close();
+  } catch (_) {}
+  try {
+    if (pkPeer) pkPeer.destroy();
+  } catch (_) {}
+  pkConn = null;
+  pkPeer = null;
+}
+
+function pkSend(msg) {
+  if (pkConn && pkConn.open) {
+    try {
+      pkConn.send(msg);
+    } catch (_) {}
+  }
+}
+
+function makeRoomCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function peerIdFromCode(code) {
+  return "hhpk" + String(code || "").replace(/\D/g, "");
+}
+
 function startPkSetup() {
   clearTimeout(autoNextTimer);
   stopShootLoop();
+  stopGunLoop();
+  destroyPkNet();
   const names = loadPkNames();
   state.view = "game";
   state.game = "pk";
   state.feedback = "";
   state.pk = {
     phase: "setup",
+    mode: "choose",
     nameA: names.a,
     nameB: names.b,
+    myName: names.a,
     scoreA: 0,
     scoreB: 0,
+    myScore: 0,
+    oppScore: 0,
     index: 0,
     queue: [],
     current: null,
     lockedA: false,
     lockedB: false,
+    myLocked: false,
+    oppLocked: false,
     resolved: false,
     roundWinner: null,
+    roomCode: "",
+    role: "",
+    status: "",
+    oppName: "",
   };
   markPlayed("pk");
   render();
@@ -1318,6 +1381,7 @@ function beginPkBattle(nameA, nameB) {
   savePkNames(a, b);
   state.pk = {
     phase: "battle",
+    mode: "local",
     nameA: a,
     nameB: b,
     scoreA: 0,
@@ -1334,6 +1398,182 @@ function beginPkBattle(nameA, nameB) {
   render();
 }
 
+function createOnlineRoom(name) {
+  if (typeof Peer === "undefined") {
+    alert("联网组件加载失败，请检查网络后刷新重试。");
+    return;
+  }
+  destroyPkNet();
+  const myName = (name || "我").trim() || "我";
+  savePkNames(myName, loadPkNames().b);
+  const code = makeRoomCode();
+  const peerId = peerIdFromCode(code);
+  state.pk = {
+    phase: "online-wait",
+    mode: "online",
+    role: "host",
+    roomCode: code,
+    myName,
+    oppName: "",
+    nameA: myName,
+    nameB: "等待对手…",
+    scoreA: 0,
+    scoreB: 0,
+    myScore: 0,
+    oppScore: 0,
+    index: 0,
+    queue: [],
+    current: null,
+    myLocked: false,
+    oppLocked: false,
+    resolved: false,
+    status: "正在创建房间…",
+  };
+  render();
+  pkPeer = new Peer(peerId);
+  pkPeer.on("open", () => {
+    if (!state.pk || state.pk.mode !== "online") return;
+    state.pk.status = "房间已创建。把房间号发给另一台设备的家人吧！";
+    render();
+  });
+  pkPeer.on("connection", (conn) => {
+    pkConn = conn;
+    wirePkConnection(conn);
+  });
+  pkPeer.on("error", (err) => {
+    if (!state.pk) return;
+    if (err && err.type === "unavailable-id") {
+      createOnlineRoom(myName);
+      return;
+    }
+    state.pk.status = "创建失败，请重试（" + ((err && err.type) || "网络错误") + "）";
+    render();
+  });
+}
+
+function joinOnlineRoom(code, name) {
+  if (typeof Peer === "undefined") {
+    alert("联网组件加载失败，请检查网络后刷新重试。");
+    return;
+  }
+  const clean = String(code || "").replace(/\D/g, "");
+  if (clean.length < 4) {
+    alert("请输入有效房间号");
+    return;
+  }
+  destroyPkNet();
+  const myName = (name || "我").trim() || "我";
+  savePkNames(myName, loadPkNames().b);
+  const peerId = peerIdFromCode(clean);
+  state.pk = {
+    phase: "online-wait",
+    mode: "online",
+    role: "guest",
+    roomCode: clean,
+    myName,
+    oppName: "",
+    nameA: "房主",
+    nameB: myName,
+    scoreA: 0,
+    scoreB: 0,
+    myScore: 0,
+    oppScore: 0,
+    index: 0,
+    queue: [],
+    current: null,
+    myLocked: false,
+    oppLocked: false,
+    resolved: false,
+    status: "正在连接房间 " + clean + " …",
+  };
+  render();
+  pkPeer = new Peer();
+  pkPeer.on("open", () => {
+    pkConn = pkPeer.connect(peerId, { reliable: true });
+    wirePkConnection(pkConn);
+  });
+  pkPeer.on("error", (err) => {
+    if (!state.pk) return;
+    state.pk.status = "连接失败（" + ((err && err.type) || "网络错误") + "）。请确认房间号，并让双方都打开同一网址。";
+    render();
+  });
+}
+
+function wirePkConnection(conn) {
+  conn.on("open", () => {
+    if (!state.pk) return;
+    pkSend({ type: "hello", name: state.pk.myName, role: state.pk.role });
+    if (state.pk.role === "host") {
+      state.pk.status = "对手已连上，正在发题…";
+      render();
+    } else {
+      state.pk.status = "已连上，等待房主发题…";
+      render();
+    }
+  });
+  conn.on("data", (msg) => handlePkNetMessage(msg));
+  conn.on("close", () => {
+    if (!state.pk || state.pk.phase === "result") return;
+    state.pk.status = "对方已断开连接";
+    state.feedback = "联网中断";
+    state.feedbackOk = false;
+    render();
+  });
+  conn.on("error", () => {
+    if (!state.pk) return;
+    state.pk.status = "连接出错，请返回重试";
+    render();
+  });
+}
+
+function handlePkNetMessage(msg) {
+  const pk = state.pk;
+  if (!pk || pk.mode !== "online" || !msg || !msg.type) return;
+
+  if (msg.type === "hello") {
+    pk.oppName = msg.name || "对手";
+    if (pk.role === "host") {
+      pk.nameA = pk.myName;
+      pk.nameB = pk.oppName;
+      const queue = serializePkQueue(buildPkQueue());
+      pk.queue = hydratePkQueue(queue);
+      pkSend({ type: "start", queue, name: pk.myName });
+      beginOnlineBattle();
+    } else {
+      pk.nameA = pk.oppName;
+      pk.nameB = pk.myName;
+    }
+    return;
+  }
+
+  if (msg.type === "start" && pk.role === "guest") {
+    pk.queue = hydratePkQueue(msg.queue || []);
+    pk.oppName = msg.name || "房主";
+    pk.nameA = pk.oppName;
+    pk.nameB = pk.myName;
+    beginOnlineBattle();
+    return;
+  }
+
+  if (msg.type === "answer") {
+    applyOnlineAnswer(msg, false);
+  }
+}
+
+function beginOnlineBattle() {
+  const pk = state.pk;
+  if (!pk) return;
+  pk.phase = "online-battle";
+  pk.index = 0;
+  pk.myScore = 0;
+  pk.oppScore = 0;
+  pk.scoreA = 0;
+  pk.scoreB = 0;
+  pk.status = "对战开始！";
+  spawnOnlineRound();
+  render();
+}
+
 function spawnPkRound() {
   const pk = state.pk;
   if (!pk) return;
@@ -1344,7 +1584,7 @@ function spawnPkRound() {
   const next = pk.queue[pk.index];
   pk.current = {
     ...next,
-    options: shuffle([next.answer, ...pickDistractors(next.answer, "zh", 3)]),
+    options: next.options || shuffle([next.answer, ...pickDistractors(next.answer, "zh", 3)]),
   };
   pk.lockedA = false;
   pk.lockedB = false;
@@ -1352,6 +1592,103 @@ function spawnPkRound() {
   pk.roundWinner = null;
   state.feedback = "";
   state.feedbackOk = null;
+}
+
+function spawnOnlineRound() {
+  const pk = state.pk;
+  if (!pk) return;
+  if (pk.index >= pk.queue.length) {
+    finishPk();
+    return;
+  }
+  const next = pk.queue[pk.index];
+  pk.current = {
+    ...next,
+    options: next.options || shuffle([next.answer, ...pickDistractors(next.answer, "zh", 3)]),
+  };
+  pk.myLocked = false;
+  pk.oppLocked = false;
+  pk.resolved = false;
+  pk.roundWinner = null;
+  state.feedback = "抢答！谁先点对谁得分";
+  state.feedbackOk = null;
+}
+
+function syncOnlineScoresToAB() {
+  const pk = state.pk;
+  if (!pk) return;
+  if (pk.role === "host") {
+    pk.scoreA = pk.myScore;
+    pk.scoreB = pk.oppScore;
+    pk.nameA = pk.myName;
+    pk.nameB = pk.oppName || "对手";
+  } else {
+    pk.scoreA = pk.oppScore;
+    pk.scoreB = pk.myScore;
+    pk.nameA = pk.oppName || "房主";
+    pk.nameB = pk.myName;
+  }
+}
+
+function applyOnlineAnswer(msg, fromMe) {
+  const pk = state.pk;
+  if (!pk || pk.phase !== "online-battle" || !pk.current) return;
+  if (msg.index !== pk.index || pk.resolved) return;
+
+  if (!msg.ok) {
+    if (fromMe) pk.myLocked = true;
+    else pk.oppLocked = true;
+    state.feedback = fromMe ? "你答错了，对方还能抢！" : "对方答错了，你继续抢！";
+    state.feedbackOk = false;
+    if (fromMe) addWrong(pk.current.item || { en: pk.current.en, zh: pk.current.zh });
+    if (pk.myLocked && pk.oppLocked) {
+      pk.resolved = true;
+      state.feedback = `双方都错了。答案：${pk.current.answer}`;
+      render();
+      setTimeout(() => advanceOnlineRound(), 1100);
+      return;
+    }
+    render();
+    return;
+  }
+
+  pk.resolved = true;
+  pk.roundWinner = fromMe ? "me" : "opp";
+  if (fromMe) pk.myScore += 1;
+  else pk.oppScore += 1;
+  syncOnlineScoresToAB();
+  state.feedback = fromMe ? "你抢到了！" : "对方抢到了！";
+  state.feedbackOk = fromMe;
+  if (fromMe) markCorrect(pk.current.item || { en: pk.current.en, zh: pk.current.zh });
+  render();
+  setTimeout(() => advanceOnlineRound(), 900);
+}
+
+function advanceOnlineRound() {
+  if (!state.pk || state.game !== "pk" || state.pk.mode !== "online") return;
+  state.pk.index += 1;
+  if (state.pk.index >= state.pk.queue.length) {
+    finishPk();
+    return;
+  }
+  spawnOnlineRound();
+  render();
+}
+
+function answerOnlinePk(choice) {
+  const pk = state.pk;
+  if (!pk || pk.phase !== "online-battle" || !pk.current || pk.resolved || pk.myLocked) return;
+  const ok = choice === pk.current.answer;
+  const msg = {
+    type: "answer",
+    index: pk.index,
+    choice,
+    ok,
+    at: Date.now(),
+    name: pk.myName,
+  };
+  pkSend(msg);
+  applyOnlineAnswer(msg, true);
 }
 
 function answerPk(side, choice) {
@@ -1383,7 +1720,6 @@ function answerPk(side, choice) {
     return;
   }
 
-  // 答错：这一侧本轮锁住，另一侧还能抢
   if (side === "a") pk.lockedA = true;
   else pk.lockedB = true;
   addWrong(pk.current.item);
@@ -1413,12 +1749,23 @@ function finishPk() {
   const pk = state.pk;
   if (!pk) return;
   pk.phase = "result";
+  if (pk.mode === "online") syncOnlineScoresToAB();
   const tie = pk.scoreA === pk.scoreB;
   const aWins = pk.scoreA > pk.scoreB;
   state.score = Math.max(pk.scoreA, pk.scoreB);
-  state.feedback = tie
-    ? `平局！${pk.nameA} ${pk.scoreA} : ${pk.scoreB} ${pk.nameB}`
-    : `${aWins ? pk.nameA : pk.nameB} 获胜！${pk.nameA} ${pk.scoreA} : ${pk.scoreB} ${pk.nameB}`;
+  if (pk.mode === "online") {
+    const meWin = pk.myScore > pk.oppScore;
+    const meTie = pk.myScore === pk.oppScore;
+    state.feedback = meTie
+      ? `平局！你 ${pk.myScore} : ${pk.oppScore} 对方`
+      : meWin
+        ? `你赢了！你 ${pk.myScore} : ${pk.oppScore} 对方`
+        : `对方获胜！你 ${pk.myScore} : ${pk.oppScore} 对方`;
+  } else {
+    state.feedback = tie
+      ? `平局！${pk.nameA} ${pk.scoreA} : ${pk.scoreB} ${pk.nameB}`
+      : `${aWins ? pk.nameA : pk.nameB} 获胜！${pk.nameA} ${pk.scoreA} : ${pk.scoreB} ${pk.nameB}`;
+  }
   state.feedbackOk = true;
   earnStars(3 + Math.max(pk.scoreA, pk.scoreB));
   state.view = "result";
@@ -2323,8 +2670,29 @@ function renderPk() {
     return `
       ${toolbar("双人 PK")}
       <div class="card soft">
-        <h2>同屏抢答比赛</h2>
-        <p class="muted">一人坐左边（红方），一人坐右边（蓝方）。中间出题，两边各自点选项，<strong>谁先点对谁得分</strong>。共 ${PK_ROUNDS} 题。</p>
+        <h2>选择对战方式</h2>
+        <p class="muted">可以两个人用同一台平板同屏抢答，也可以两台手机/平板联网对战。</p>
+      </div>
+      <div class="games" style="margin-bottom:12px">
+        <button class="game-btn" data-pk-mode="local">
+          <strong>同屏 PK</strong>
+          <span>一台设备，左右分开点</span>
+        </button>
+        <button class="game-btn" data-pk-mode="online">
+          <strong>联网 PK</strong>
+          <span>两台设备，输入房间号开战</span>
+        </button>
+      </div>
+      <button class="ghost" data-home>回首页</button>
+    `;
+  }
+
+  if (pk.phase === "local-setup") {
+    return `
+      ${toolbar("同屏 PK")}
+      <div class="card soft">
+        <h2>同屏抢答</h2>
+        <p class="muted">一人坐左边，一人坐右边。谁先点对谁得分。共 ${PK_ROUNDS} 题。</p>
       </div>
       <div class="pk-setup">
         <label class="pk-name pk-a">
@@ -2337,7 +2705,96 @@ function renderPk() {
         </label>
       </div>
       <button class="primary" data-pk-start>开始对战</button>
-      <button class="ghost" data-home>回首页</button>
+      <button class="ghost" data-pk-mode="choose">返回</button>
+    `;
+  }
+
+  if (pk.phase === "online-setup") {
+    return `
+      ${toolbar("联网 PK")}
+      <div class="card soft">
+        <h2>两台设备对战</h2>
+        <p class="muted">双方打开同一网址。一方创建房间，另一方输入房间号加入。</p>
+      </div>
+      <label class="pk-name" style="display:grid;margin-bottom:12px">
+        <span>你的昵称</span>
+        <input id="pkOnlineName" value="${esc(pk.myName || "我")}" maxlength="8" />
+      </label>
+      <div class="games" style="margin-bottom:12px">
+        <button class="game-btn" data-pk-online="host">
+          <strong>创建房间</strong>
+          <span>生成房间号发给对方</span>
+        </button>
+        <button class="game-btn" data-pk-online="join-form">
+          <strong>加入房间</strong>
+          <span>输入对方的房间号</span>
+        </button>
+      </div>
+      <div id="pkJoinBox" class="card" style="display:none">
+        <label class="pk-name" style="display:grid">
+          <span>房间号</span>
+          <input id="pkRoomInput" inputmode="numeric" maxlength="6" placeholder="6 位数字" />
+        </label>
+        <button class="primary" data-pk-online="join">加入对战</button>
+      </div>
+      <button class="ghost" data-pk-mode="choose">返回</button>
+    `;
+  }
+
+  if (pk.phase === "online-wait") {
+    return `
+      ${toolbar("联网 PK")}
+      <div class="card center soft">
+        <h2>${pk.role === "host" ? "房间号" : "正在加入"}</h2>
+        ${
+          pk.role === "host"
+            ? `<p class="room-code">${esc(pk.roomCode)}</p>
+               <p class="muted">请让另一台设备打开同一网址，选择「联网 PK → 加入房间」，输入上面的号码。</p>`
+            : `<p class="zh-line">房间 ${esc(pk.roomCode)}</p>`
+        }
+        <p class="tip">${esc(pk.status || "等待中…")}</p>
+        <p class="muted">我：${esc(pk.myName)}${pk.oppName ? " · 对方：" + esc(pk.oppName) : ""}</p>
+      </div>
+      <button class="ghost" data-home>取消并回首页</button>
+    `;
+  }
+
+  if (pk.phase === "online-battle") {
+    const cur = pk.current;
+    if (!cur) return `${toolbar("联网 PK")}<div class="card"><p class="muted">准备中…</p></div>`;
+    return `
+      <div class="toolbar">
+        <button class="back" data-home>← 退出</button>
+        <span class="chip">联网 · ${pk.index + 1}/${pk.queue.length}</span>
+      </div>
+      <div class="pk-scoreboard">
+        <div class="pk-score a">
+          <strong>我·${esc(pk.myName)}</strong>
+          <span>${pk.myScore}</span>
+        </div>
+        <div class="pk-vs">VS</div>
+        <div class="pk-score b">
+          <strong>对方·${esc(pk.oppName || "对手")}</strong>
+          <span>${pk.oppScore}</span>
+        </div>
+      </div>
+      <div class="card center pk-prompt">
+        <p class="muted">${esc(cur.hint || "抢答")}${pk.myLocked ? "（你本轮已锁）" : ""}</p>
+        <p class="big-en">${cur.highlight ? highlightWord(cur.prompt, cur.highlight) : esc(cur.prompt)}</p>
+        <button class="ghost" data-speak="${esc(cur.speak)}">听发音</button>
+      </div>
+      <div class="choices">
+        ${(cur.options || [])
+          .map((o) => {
+            let cls = "choice";
+            if (pk.resolved && o === cur.answer) cls += " ok";
+            return `<button class="${cls}" data-pk-online-answer="${esc(o)}" ${
+              pk.resolved || pk.myLocked ? "disabled" : ""
+            }>${esc(o)}</button>`;
+          })
+          .join("")}
+      </div>
+      ${feedbackBlock()}
     `;
   }
 
@@ -2475,6 +2932,54 @@ function bind() {
       const b = document.getElementById("pkNameB");
       beginPkBattle(a ? a.value : "红方", b ? b.value : "蓝方");
     }),
+  );
+  document.querySelectorAll("[data-pk-mode]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const mode = el.getAttribute("data-pk-mode");
+      if (!state.pk) return;
+      if (mode === "choose") {
+        destroyPkNet();
+        state.pk.phase = "setup";
+        state.pk.mode = "choose";
+        render();
+        return;
+      }
+      if (mode === "local") {
+        state.pk.phase = "local-setup";
+        state.pk.mode = "local";
+        render();
+        return;
+      }
+      if (mode === "online") {
+        state.pk.phase = "online-setup";
+        state.pk.mode = "online";
+        state.pk.myName = state.pk.nameA || "我";
+        render();
+      }
+    }),
+  );
+  document.querySelectorAll("[data-pk-online]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const act = el.getAttribute("data-pk-online");
+      const nameEl = document.getElementById("pkOnlineName");
+      const name = nameEl ? nameEl.value : "我";
+      if (act === "host") {
+        createOnlineRoom(name);
+        return;
+      }
+      if (act === "join-form") {
+        const box = document.getElementById("pkJoinBox");
+        if (box) box.style.display = "block";
+        return;
+      }
+      if (act === "join") {
+        const input = document.getElementById("pkRoomInput");
+        joinOnlineRoom(input ? input.value : "", name);
+      }
+    }),
+  );
+  document.querySelectorAll("[data-pk-online-answer]").forEach((el) =>
+    el.addEventListener("click", () => answerOnlinePk(el.getAttribute("data-pk-online-answer"))),
   );
   document.querySelectorAll("[data-pk-side]").forEach((el) =>
     el.addEventListener("click", () => {
