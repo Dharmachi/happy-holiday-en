@@ -618,7 +618,7 @@ function startShootRun() {
     queue: buildShootQueue(),
     current: null,
     y: 0,
-    speed: 38,
+    speed: 18,
     locked: false,
     bang: false,
   };
@@ -639,7 +639,8 @@ function spawnShootTarget() {
   s.y = 0;
   s.locked = false;
   s.bang = false;
-  s.speed = 34 + Math.floor(s.cleared / 3) * 8;
+  // 更慢起步，随进度缓慢加快
+  s.speed = 14 + Math.floor(s.cleared / 4) * 3;
 }
 
 function finishShoot(won) {
