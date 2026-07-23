@@ -11,6 +11,7 @@ const AUTO_NEXT_BAD = 1200;
 const SRS_DAYS = [1, 2, 4, 7, 15, 30];
 
 const GAMES = [
+  { id: "pk", title: "双人 PK", desc: "同屏抢答，比比谁更快", cat: "对战" },
   { id: "shoot", title: "词块坠落", desc: "过关打词：词·短语·句子", cat: "闯关" },
   { id: "flash", title: "单词闪卡", desc: "点选后自动下一张", cat: "单词" },
   { id: "quiz", title: "中英互译", desc: "点选后自动下一题", cat: "单词" },
@@ -27,6 +28,9 @@ const GAMES = [
   { id: "notebook", title: "我的生词本", desc: "查看、删除、看下次复习", cat: "复习" },
   { id: "review", title: "错题本", desc: "专攻错过的题", cat: "复习" },
 ];
+
+const PK_ROUNDS = 10;
+const PK_NAMES_KEY = "hh-pk-names-v1";
 
 let autoNextTimer = null;
 let speakAudio = null;
@@ -63,6 +67,7 @@ const state = {
   shoot: null,
   notebookDue: 0,
   notebookTotal: 0,
+  pk: null,
 };
 
 function loadStars() {
@@ -431,6 +436,8 @@ function goHome() {
   state.game = null;
   state.feedback = "";
   state.shoot = null;
+  state.pk = null;
+  refreshNotebookStats();
   render();
 }
 
@@ -476,6 +483,10 @@ function startGame(gameId) {
     markPlayed(gameId);
     refreshNotebookStats();
     render();
+    return;
+  }
+  if (gameId === "pk") {
+    startPkSetup();
     return;
   }
   state.view = "game";
@@ -747,6 +758,192 @@ function startGrammarPractice() {
   render();
 }
 
+function loadPkNames() {
+  try {
+    const n = JSON.parse(localStorage.getItem(PK_NAMES_KEY) || "{}");
+    return {
+      a: n.a || "红方",
+      b: n.b || "蓝方",
+    };
+  } catch {
+    return { a: "红方", b: "蓝方" };
+  }
+}
+
+function savePkNames(a, b) {
+  localStorage.setItem(PK_NAMES_KEY, JSON.stringify({ a, b }));
+}
+
+function buildPkQueue() {
+  const words = pick(allVocab(), 6).map((x) => ({
+    type: "word",
+    prompt: x.en,
+    answer: x.zh,
+    speak: x.en,
+    item: x,
+    hint: "这个单词是什么意思？",
+  }));
+  const phrases = pick(allPhrases(), 2).map((x) => ({
+    type: "phrase",
+    prompt: x.en,
+    answer: x.zh,
+    speak: x.en,
+    item: x,
+    hint: "这个短语是什么意思？",
+  }));
+  const sentences = pick(
+    allVocab().filter((x) => x.ex),
+    2,
+  ).map((x) => ({
+    type: "sentence",
+    prompt: x.ex,
+    answer: x.zh,
+    speak: x.ex,
+    item: x,
+    hint: "句子里这个词是什么意思？",
+    highlight: x.en,
+  }));
+  return shuffle([...words, ...phrases, ...sentences]).slice(0, PK_ROUNDS);
+}
+
+function startPkSetup() {
+  clearTimeout(autoNextTimer);
+  stopShootLoop();
+  const names = loadPkNames();
+  state.view = "game";
+  state.game = "pk";
+  state.feedback = "";
+  state.pk = {
+    phase: "setup",
+    nameA: names.a,
+    nameB: names.b,
+    scoreA: 0,
+    scoreB: 0,
+    index: 0,
+    queue: [],
+    current: null,
+    lockedA: false,
+    lockedB: false,
+    resolved: false,
+    roundWinner: null,
+  };
+  markPlayed("pk");
+  render();
+}
+
+function beginPkBattle(nameA, nameB) {
+  const a = (nameA || "红方").trim() || "红方";
+  const b = (nameB || "蓝方").trim() || "蓝方";
+  savePkNames(a, b);
+  state.pk = {
+    phase: "battle",
+    nameA: a,
+    nameB: b,
+    scoreA: 0,
+    scoreB: 0,
+    index: 0,
+    queue: buildPkQueue(),
+    current: null,
+    lockedA: false,
+    lockedB: false,
+    resolved: false,
+    roundWinner: null,
+  };
+  spawnPkRound();
+  render();
+}
+
+function spawnPkRound() {
+  const pk = state.pk;
+  if (!pk) return;
+  if (pk.index >= pk.queue.length) {
+    finishPk();
+    return;
+  }
+  const next = pk.queue[pk.index];
+  pk.current = {
+    ...next,
+    options: shuffle([next.answer, ...pickDistractors(next.answer, "zh", 3)]),
+  };
+  pk.lockedA = false;
+  pk.lockedB = false;
+  pk.resolved = false;
+  pk.roundWinner = null;
+  state.feedback = "";
+  state.feedbackOk = null;
+}
+
+function answerPk(side, choice) {
+  const pk = state.pk;
+  if (!pk || pk.phase !== "battle" || !pk.current || pk.resolved) return;
+  if (side === "a" && pk.lockedA) return;
+  if (side === "b" && pk.lockedB) return;
+
+  const ok = choice === pk.current.answer;
+  if (ok) {
+    pk.resolved = true;
+    pk.roundWinner = side;
+    if (side === "a") pk.scoreA += 1;
+    else pk.scoreB += 1;
+    state.feedback = `${side === "a" ? pk.nameA : pk.nameB} 抢到了！`;
+    state.feedbackOk = true;
+    markCorrect(pk.current.item);
+    render();
+    setTimeout(() => {
+      if (!state.pk || state.game !== "pk") return;
+      state.pk.index += 1;
+      if (state.pk.index >= state.pk.queue.length) {
+        finishPk();
+        return;
+      }
+      spawnPkRound();
+      render();
+    }, 900);
+    return;
+  }
+
+  // 答错：这一侧本轮锁住，另一侧还能抢
+  if (side === "a") pk.lockedA = true;
+  else pk.lockedB = true;
+  addWrong(pk.current.item);
+  state.feedback = `${side === "a" ? pk.nameA : pk.nameB} 答错了，对方继续抢！`;
+  state.feedbackOk = false;
+
+  if (pk.lockedA && pk.lockedB) {
+    pk.resolved = true;
+    state.feedback = `双方都错了。答案：${pk.current.answer}`;
+    render();
+    setTimeout(() => {
+      if (!state.pk || state.game !== "pk") return;
+      state.pk.index += 1;
+      if (state.pk.index >= state.pk.queue.length) {
+        finishPk();
+        return;
+      }
+      spawnPkRound();
+      render();
+    }, 1100);
+    return;
+  }
+  render();
+}
+
+function finishPk() {
+  const pk = state.pk;
+  if (!pk) return;
+  pk.phase = "result";
+  const tie = pk.scoreA === pk.scoreB;
+  const aWins = pk.scoreA > pk.scoreB;
+  state.score = Math.max(pk.scoreA, pk.scoreB);
+  state.feedback = tie
+    ? `平局！${pk.nameA} ${pk.scoreA} : ${pk.scoreB} ${pk.nameB}`
+    : `${aWins ? pk.nameA : pk.nameB} 获胜！${pk.nameA} ${pk.scoreA} : ${pk.scoreB} ${pk.nameB}`;
+  state.feedbackOk = true;
+  earnStars(3 + Math.max(pk.scoreA, pk.scoreB));
+  state.view = "result";
+  render();
+}
+
 function setupMatch(items) {
   state.round = items;
   state.matchLeft = shuffle(items.map((x) => ({ id: x.en, label: x.en, side: "en" })));
@@ -1004,7 +1201,7 @@ function $(sel) {
 
 function renderHome() {
   const u = window.UNIT;
-  const cats = ["闯关", "单词", "表达", "语法", "课文", "复习"];
+  const cats = ["对战", "闯关", "单词", "表达", "语法", "课文", "复习"];
   const played = Object.keys(state.progress).length;
   return `
     <header class="hero">
@@ -1561,18 +1758,98 @@ function renderRead() {
   `;
 }
 
-function renderReview() {
-  return renderQuiz();
+function renderPk() {
+  const pk = state.pk;
+  if (!pk) return `<div class="card"><button class="primary" data-home>回首页</button></div>`;
+
+  if (pk.phase === "setup") {
+    return `
+      ${toolbar("双人 PK")}
+      <div class="card soft">
+        <h2>同屏抢答比赛</h2>
+        <p class="muted">一人坐左边（红方），一人坐右边（蓝方）。中间出题，两边各自点选项，<strong>谁先点对谁得分</strong>。共 ${PK_ROUNDS} 题。</p>
+      </div>
+      <div class="pk-setup">
+        <label class="pk-name pk-a">
+          <span>红方昵称</span>
+          <input id="pkNameA" value="${esc(pk.nameA)}" maxlength="8" />
+        </label>
+        <label class="pk-name pk-b">
+          <span>蓝方昵称</span>
+          <input id="pkNameB" value="${esc(pk.nameB)}" maxlength="8" />
+        </label>
+      </div>
+      <button class="primary" data-pk-start>开始对战</button>
+      <button class="ghost" data-home>回首页</button>
+    `;
+  }
+
+  const cur = pk.current;
+  if (!cur) return `${toolbar("双人 PK")}<div class="card"><p class="muted">准备中…</p></div>`;
+
+  const optBtns = (side, locked) =>
+    cur.options
+      .map((o) => {
+        let cls = `choice pk-opt ${side === "a" ? "side-a" : "side-b"}`;
+        if (pk.resolved && o === cur.answer) cls += " ok";
+        return `<button class="${cls}" data-pk-side="${side}" data-pk-choice="${esc(o)}" ${
+          locked || pk.resolved ? "disabled" : ""
+        }>${esc(o)}</button>`;
+      })
+      .join("");
+
+  return `
+    <div class="toolbar">
+      <button class="back" data-home>← 退出</button>
+      <span class="chip">第 ${pk.index + 1}/${pk.queue.length} 题</span>
+    </div>
+    <div class="pk-scoreboard">
+      <div class="pk-score a">
+        <strong>${esc(pk.nameA)}</strong>
+        <span>${pk.scoreA}</span>
+      </div>
+      <div class="pk-vs">VS</div>
+      <div class="pk-score b">
+        <strong>${esc(pk.nameB)}</strong>
+        <span>${pk.scoreB}</span>
+      </div>
+    </div>
+    <div class="card center pk-prompt">
+      <p class="muted">${esc(cur.hint || "抢答")}</p>
+      <p class="big-en">${cur.highlight ? highlightWord(cur.prompt, cur.highlight) : esc(cur.prompt)}</p>
+      <button class="ghost" data-speak="${esc(cur.speak)}">听发音</button>
+    </div>
+    <div class="pk-arena">
+      <div class="pk-col a ${pk.lockedA ? "locked" : ""}">
+        <p class="pk-col-title">${esc(pk.nameA)}${pk.lockedA ? "（本轮锁住）" : ""}</p>
+        <div class="choices">${optBtns("a", pk.lockedA)}</div>
+      </div>
+      <div class="pk-col b ${pk.lockedB ? "locked" : ""}">
+        <p class="pk-col-title">${esc(pk.nameB)}${pk.lockedB ? "（本轮锁住）" : ""}</p>
+        <div class="choices">${optBtns("b", pk.lockedB)}</div>
+      </div>
+    </div>
+    ${feedbackBlock()}
+  `;
 }
 
 function renderResult() {
   const g = GAMES.find((x) => x.id === state.game);
+  const pk = state.game === "pk" ? state.pk : null;
   return `
     <div class="card center result">
-      <p class="eyebrow">本轮结束</p>
+      <p class="eyebrow">${pk ? "对战结束" : "本轮结束"}</p>
       <h1>${esc(g ? g.title : "练习")}</h1>
       ${state.feedback ? `<p class="tip ${state.feedbackOk ? "ok" : "bad"}">${esc(state.feedback)}</p>` : ""}
-      <p class="zh-line">得分 ${state.score}</p>
+      ${
+        pk
+          ? `<div class="pk-final">
+              <div class="pk-score a"><strong>${esc(pk.nameA)}</strong><span>${pk.scoreA}</span></div>
+              <div class="pk-vs">:</div>
+              <div class="pk-score b"><strong>${esc(pk.nameB)}</strong><span>${pk.scoreB}</span></div>
+            </div>`
+          : `<p class="zh-line">得分 ${state.score}</p>`
+      }
       <p class="muted">星星累计：★ ${state.stars}</p>
       <div class="row">
         <button class="primary" data-restart>再来一轮</button>
@@ -1584,6 +1861,8 @@ function renderResult() {
 
 function renderGame() {
   switch (state.game) {
+    case "pk":
+      return renderPk();
     case "shoot":
       return renderShoot();
     case "flash":
@@ -1630,6 +1909,18 @@ function bind() {
   document.querySelectorAll("[data-home]").forEach((el) => el.addEventListener("click", goHome));
   document.querySelectorAll("[data-start]").forEach((el) =>
     el.addEventListener("click", () => startGame(el.getAttribute("data-start"))),
+  );
+  document.querySelectorAll("[data-pk-start]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const a = document.getElementById("pkNameA");
+      const b = document.getElementById("pkNameB");
+      beginPkBattle(a ? a.value : "红方", b ? b.value : "蓝方");
+    }),
+  );
+  document.querySelectorAll("[data-pk-side]").forEach((el) =>
+    el.addEventListener("click", () => {
+      answerPk(el.getAttribute("data-pk-side"), el.getAttribute("data-pk-choice"));
+    }),
   );
   document.querySelectorAll("[data-shoot]").forEach((el) =>
     el.addEventListener("click", () => answerShoot(el.getAttribute("data-shoot"))),
