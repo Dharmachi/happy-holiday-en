@@ -17,6 +17,10 @@
   const SRS_INTERVAL = [10 * MIN, 30 * MIN, 2 * HOUR, 8 * HOUR, 1 * DAY, 3 * DAY];
   const MASTER_BOX = 3; /* box >= 3 視為已掌握 */
 
+  /* 作答後自動跳下一題的停留時間。答錯要留時間看解說，所以久一點。 */
+  const AUTO_OK = 900;
+  const AUTO_BAD = 3000;
+
   const app = document.getElementById("app");
 
   const GAMES = [
@@ -289,6 +293,8 @@
     blitzMode: null,
     blitzWrong: [],
     blitzDone: false,
+    autoTimer: null,
+    autoWait: 0,
     feedback: "",
     feedbackKind: "",
     backupMsg: "",
@@ -344,8 +350,33 @@
     const map = { home: renderHome, table: renderTable, grammar: renderGrammar,
                   stats: renderStats, backup: renderBackup, game: renderGame };
     (map[state.view] || renderHome)();
+    /* 等待自動跳轉時，點畫面任何地方可立刻繼續 */
+    app.onclick = state.autoTimer ? skipWait : null;
   }
-  function go(view) { state.view = view; window.scrollTo(0, 0); render(); }
+  function go(view) { clearAuto(); state.view = view; window.scrollTo(0, 0); render(); }
+
+  /* ---------- 自動跳下一題 ---------- */
+  function clearAuto() {
+    if (state.autoTimer) { clearTimeout(state.autoTimer); state.autoTimer = null; }
+    state.autoWait = 0;
+  }
+  function scheduleAuto(ok) {
+    clearAuto();
+    state.autoWait = ok ? AUTO_OK : AUTO_BAD;
+    state.autoTimer = setTimeout(() => { state.autoTimer = null; next(); }, state.autoWait);
+  }
+  /** 點畫面立刻跳下一題（只在等待中有效） */
+  function skipWait() {
+    if (!state.autoTimer) return;
+    clearAuto();
+    next();
+  }
+  /** 回饋框底部的倒數條，讓人知道馬上要跳了 */
+  function countdown() {
+    if (!state.autoWait) return "";
+    return `<div class="countdown" style="--cd:${state.autoWait}ms"><i></i></div>
+      <div class="cd-hint">自動跳下一題 · 點畫面可立刻繼續</div>`;
+  }
   function backBar(extra) {
     return `<div class="toolbar"><button class="back" onclick="PK.home()">← 返回</button>${extra || ""}</div>`;
   }
@@ -673,6 +704,7 @@
   }
 
   function resetQuestion() {
+    clearAuto();
     state.answered = false;
     state.selected = null;
     state.flip = false;
@@ -789,8 +821,7 @@
         <p class="muted">這個動詞的 Perfekt 用哪個助動詞？</p>
       </div>
       <div class="choices two">${btns}</div>
-      ${feedbackBox(v)}
-      ${state.answered ? nextBtn() : ""}`;
+      ${feedbackBox(v)}`;
   }
   function answerAux(k) {
     if (state.answered) return;
@@ -833,8 +864,7 @@
         <p class="muted">正確的第二分詞 Partizip II 是？</p>
       </div>
       <div class="choices four">${btns}</div>
-      ${feedbackBox(v)}
-      ${state.answered ? nextBtn() : ""}`;
+      ${feedbackBox(v)}`;
   }
   function answerPp(pp) {
     if (state.answered) return;
@@ -866,8 +896,7 @@
         <p class="muted">這是哪一類動詞？</p>
       </div>
       <div class="choices four">${btns}</div>
-      ${state.answered ? `<div class="tip ${state.feedbackKind}">${state.feedback}</div>` : ""}
-      ${state.answered ? nextBtn() : ""}`;
+      ${state.answered ? `<div class="tip ${state.feedbackKind}">${state.feedback}${countdown()}</div>` : ""}`;
   }
   function answerFam(k) {
     if (state.answered) return;
@@ -879,6 +908,7 @@
     if (ok) state.score += 1;
     state.feedbackKind = ok ? "ok" : "bad";
     state.feedback = `${ok ? "✔ 正確！" : "✘ 這是「" + FAMS[v.fam].label + "」"}\n${FAMS[v.fam].rule}`;
+    scheduleAuto(ok);
     render();
   }
 
@@ -903,7 +933,7 @@
         ${state.answered ? "disabled" : ""} />
       <div class="keys">${keys}</div>
       ${feedbackBox(v)}
-      ${state.answered ? nextBtn() : `<button class="primary" onclick="PK.spellSubmit()">確認</button>`}`;
+      ${state.answered ? "" : `<button class="primary" onclick="PK.spellSubmit()">確認</button>`}`;
     const inp = document.getElementById("spellIn");
     if (inp && !state.answered) { inp.focus(); const l = inp.value.length; try { inp.setSelectionRange(l, l); } catch {} }
   }
@@ -944,7 +974,7 @@
         <div class="word-pool">${pool}</div>
       </div>
       ${feedbackBox(v)}
-      ${state.answered ? nextBtn() : `<button class="primary" onclick="PK.buildCheck()">確認</button>`}`;
+      ${state.answered ? "" : `<button class="primary" onclick="PK.buildCheck()">確認</button>`}`;
   }
   function buildPick(id) {
     if (state.answered) return;
@@ -1056,15 +1086,13 @@
     if (!ok && v.note) msg += `\n💡 ${esc(v.note)}`;
     if (v.ex) msg += `\n例：${esc(v.ex)}`;
     state.feedback = msg;
+    scheduleAuto(ok);
   }
   function feedbackBox(v) {
     if (!state.answered || !state.feedback) return "";
     return `<div class="tip ${state.feedbackKind}">${state.feedback}
-      <button class="speak" onclick="PK.speak('${js(v.ex)}')">🔊 例句</button></div>`;
-  }
-  function nextBtn() {
-    const last = state.idx >= state.deck.length - 1;
-    return `<button class="primary" onclick="PK.next()">${last ? "看結果 →" : "下一題 →"}</button>`;
+      <button class="speak" onclick="event.stopPropagation();PK.speak('${js(v.ex)}')">🔊 例句</button>
+      ${countdown()}</div>`;
   }
 
   function renderDone() {
@@ -1094,7 +1122,7 @@
   /* ---------- public API ---------- */
   window.PK = {
     home: () => { clearInterval(state.blitzTimer); state.blitzDone = false; go("home"); },
-    start, next, flip, flashJudge, answerAux, answerPp, answerFam,
+    start, next, skipWait, flip, flashJudge, answerAux, answerPp, answerFam,
     spellInput, spellKey, spellSubmit, buildPick, buildUnpick, buildCheck, blitzAns,
     famTab: (k) => { state.famTab = k; render(); },
     speak,

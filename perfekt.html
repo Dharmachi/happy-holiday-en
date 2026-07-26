@@ -120,6 +120,23 @@
     .tip.bad { background: var(--bad-soft); color: var(--bad); }
     .tip b { color: inherit; }
 
+    /* 自動跳題倒數條 */
+    .countdown {
+      height: 4px; margin-top: 12px; border-radius: 999px;
+      background: rgba(0, 0, 0, 0.09); overflow: hidden;
+    }
+    .countdown i {
+      display: block; height: 100%; width: 100%;
+      background: currentColor; opacity: .55; transform-origin: left center;
+      animation: cdShrink linear forwards;
+      animation-duration: var(--cd, 1000ms);
+    }
+    @keyframes cdShrink { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+    .cd-hint { margin-top: 6px; font-size: .78rem; opacity: .75; }
+    @media (prefers-reduced-motion: reduce) {
+      .countdown i { animation: none; opacity: .3; }
+    }
+
     .flip-card { cursor: pointer; text-align: center; min-height: 210px; display: grid; align-content: center; gap: 4px; }
     .flip-hint { color: var(--muted); font-size: .85rem; margin-top: 8px; }
 
