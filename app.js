@@ -289,6 +289,27 @@ function renderProgressBars() {
 function allVocab() {
   return window.UNIT.vocab;
 }
+/**
+ * 出题用的单词池：把在峡谷里已经练到「写得出」毕业的词筛掉，只练还不会的。
+ * 查词、干扰项这些地方仍然用 allVocab()，否则毕业的词就查不到释义了。
+ */
+function trainingVocab() {
+  return window.WordLevel ? window.WordLevel.forTraining(allVocab()) : allVocab();
+}
+
+/** 首页提示：小游戏为什么不再出某些词 */
+function wordLevelLine() {
+  if (!window.WordLevel) return "";
+  const s = window.WordLevel.statsFor(allVocab());
+  if (!s.graduated && !s.untested) return "";
+  if (!s.graduated) {
+    return `<p class="muted" style="font-size:.86rem">还有 ${s.untested} 个词没定级。去峡谷做一次定级赛，会的词就不用再陪着从头练了。</p>`;
+  }
+  const filtering = allVocab().length - s.graduated >= window.WordLevel.config.minTrainingPool;
+  return `<p class="muted" style="font-size:.86rem">
+    已经练到「写得出」毕业的词：<b>${s.graduated} / ${s.total}</b>${filtering ? "，上面的单词小游戏不会再出这些词" : "，剩下的词不多了，小游戏改成全部轮着复习"}。
+  </p>`;
+}
 function allPhrases() {
   return window.UNIT.phrases;
 }
@@ -697,7 +718,7 @@ function startGame(gameId) {
   markPlayed(gameId);
 
   if (gameId === "flash" || gameId === "quiz" || gameId === "spell" || gameId === "context") {
-    const pool = gameId === "context" ? allVocab().filter((x) => x.ex) : allVocab();
+    const pool = gameId === "context" ? trainingVocab().filter((x) => x.ex) : trainingVocab();
     state.round = pick(pool, Math.min(ROUND, pool.length));
     if (gameId === "quiz") prepareQuizCard(state.round[0]);
     if (gameId === "context") prepareContextCard(state.round[0]);
@@ -705,7 +726,7 @@ function startGame(gameId) {
     state.round = pick(allPhrases(), Math.min(ROUND, allPhrases().length));
     preparePhraseCard(state.round[0]);
   } else if (gameId === "match") {
-    setupMatch(pick(allVocab(), MATCH_N));
+    setupMatch(pick(trainingVocab(), MATCH_N));
   } else if (gameId === "grammar") {
     state.grammarTab = "rules";
     state.grammarTopicId = "indefinite";
@@ -757,7 +778,7 @@ function startGame(gameId) {
 }
 
 function buildShootQueue() {
-  const vocab = pick(allVocab(), 8).map((x) => ({
+  const vocab = pick(trainingVocab(), 8).map((x) => ({
     kind: "单词",
     prompt: x.en,
     answer: x.zh,
@@ -772,7 +793,7 @@ function buildShootQueue() {
     item: x,
   }));
   const sentences = pick(
-    allVocab().filter((x) => x.ex),
+    trainingVocab().filter((x) => x.ex),
     5,
   ).map((x) => ({
     kind: "句子",
@@ -902,7 +923,7 @@ function spawnGunWave() {
   g.locked = false;
   g.bullet = null;
   g.flash = false;
-  const answerItem = pick(allVocab(), 1)[0];
+  const answerItem = pick(trainingVocab(), 1)[0];
   const decoys = pick(
     allVocab().filter((x) => x.en !== answerItem.en),
     4,
@@ -1259,7 +1280,7 @@ function savePkNames(a, b) {
 }
 
 function buildPkQueue() {
-  const words = pick(allVocab(), 6).map((x) => ({
+  const words = pick(trainingVocab(), 6).map((x) => ({
     type: "word",
     prompt: x.en,
     answer: x.zh,
@@ -1276,7 +1297,7 @@ function buildPkQueue() {
     hint: "这个短语是什么意思？",
   }));
   const sentences = pick(
-    allVocab().filter((x) => x.ex),
+    trainingVocab().filter((x) => x.ex),
     2,
   ).map((x) => ({
     type: "sentence",
@@ -2068,6 +2089,20 @@ function renderHome() {
           </section>`
         : ""
     }
+
+    <section class="card soft">
+      <h2>单词峡谷 · 对战模式</h2>
+      <p class="muted">像王者荣耀那样打一局：清兵线背单词、技能考语法、大招读课文，一路升级出装推水晶。段位和这里的生词本进度互通。</p>
+      ${wordLevelLine()}
+      <a class="primary" href="./moba.html" style="display:block;text-align:center;text-decoration:none">进入单词峡谷</a>
+    </section>
+
+    <section class="card soft">
+      <h2>德语训练</h2>
+      <p class="muted">两个独立的德语 App，进度各自单独存，不影响这边的英语记录。</p>
+      <a class="primary" href="./deutsch-drill.html" style="display:block;text-align:center;text-decoration:none">德语专项 · 三格四格 / 身体 / 可分动词</a>
+      <a class="primary" href="./perfekt.html" style="display:block;text-align:center;text-decoration:none;margin-top:8px">德语 Perfekt · 现在完成时</a>
+    </section>
 
     <section class="card soft feature-gun">
       <h2>开枪打靶</h2>

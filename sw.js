@@ -1,5 +1,22 @@
-const CACHE = "happy-holiday-v13";
-const ASSETS = ["./", "./index.html", "./app.js", "./data.js", "./manifest.webmanifest", "./icon.svg"];
+const CACHE = "happy-holiday-v15";
+const ASSETS = [
+  "./",
+  "./index.html",
+  "./app.js",
+  "./data.js",
+  "./wordlevel.js",
+  "./moba.html",
+  "./moba-data.js",
+  "./moba-app.js",
+  "./perfekt.html",
+  "./perfekt-data.js",
+  "./perfekt-app.js",
+  "./deutsch-drill.html",
+  "./deutsch-drill-data.js",
+  "./deutsch-drill-app.js",
+  "./manifest.webmanifest",
+  "./icon.svg",
+];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
@@ -16,8 +33,9 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
-  // HTML / JS 优先网络，避免家人一直看到旧版
-  if (req.mode === "navigate" || req.url.includes("app.js") || req.url.includes("data.js") || req.url.includes("index.html")) {
+  // HTML / JS 一律优先网络，避免家人一直看到旧版；漏掉任何一个脚本都会新旧混用
+  const isCode = /\.(js|html)$/.test(new URL(req.url).pathname);
+  if (req.mode === "navigate" || isCode) {
     e.respondWith(
       fetch(req)
         .then((res) => {
